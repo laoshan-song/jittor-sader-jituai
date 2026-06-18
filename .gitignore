@@ -12,6 +12,8 @@ outputs/
 *.log
 
 # Data, weights, and generated artifacts are kept out of the open-source repo.
+*.zip
+*.csv
 *.pkl
 *.pt
 *.pth
@@ -19,4 +21,4 @@ outputs/
 *.npz
 *.npy
 result.json
-submissions/*.zip
+result.zip
