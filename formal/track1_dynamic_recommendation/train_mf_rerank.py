@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hard-negative-ratio", type=float, default=0.5)
     parser.add_argument("--temperature", type=float, default=2.0)
     parser.add_argument("--uniform-mix", type=float, default=0.02)
+    parser.add_argument(
+        "--probability-mode",
+        choices=("softmax", "rank"),
+        default="softmax",
+        help="Use score softmax probabilities or strictly rank-preserving probabilities.",
+    )
     parser.add_argument("--validate-samples", type=int, default=30000)
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--skip-validation", action="store_true")
@@ -258,6 +264,22 @@ def blend_scores(heuristic_scores: list[float], mf_score_values: np.ndarray, mf_
     return [h + mf_weight * float(m) for h, m in zip(heuristic_scores, mf_score_values)]
 
 
+def rank_probabilities(scores: list[float]) -> list[float]:
+    """Return a valid distribution with one distinct value per score rank."""
+    count = len(scores)
+    total = count * (count + 1) / 2.0
+    probabilities_by_index = [0.0] * count
+    for rank, index in enumerate(sorted(range(count), key=lambda value: scores[value], reverse=True)):
+        probabilities_by_index[index] = (count - rank) / total
+    return probabilities_by_index
+
+
+def output_probabilities(scores: list[float], args: argparse.Namespace) -> list[float]:
+    if args.probability_mode == "rank":
+        return rank_probabilities(scores)
+    return probabilities(scores, args.temperature, args.uniform_mix)
+
+
 def evaluate_validation(
     data_zip: zipfile.ZipFile,
     scene: str,
@@ -353,7 +375,7 @@ def write_scene(
                     heuristic_scores = [heuristic.score(src, dst, time_value) for dst in candidates]
                     model_scores = mf_scores(src, candidates, user_to_idx, item_to_idx, user_emb, item_emb, item_bias)
                     scores = blend_scores(heuristic_scores, model_scores, args.mf_weight)
-                    probs = probabilities(scores, args.temperature, args.uniform_mix)
+                    probs = output_probabilities(scores, args)
                     writer.writerow([f"{value:.8f}" for value in probs])
                     rows += 1
     return rows
