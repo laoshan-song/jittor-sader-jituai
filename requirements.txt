@@ -1,0 +1,19 @@
+jittor==1.3.11.0
+numpy==1.26.4
+scipy==1.15.3
+scikit-learn==1.7.2
+tqdm==4.68.3
+networkx==3.4.2
+pandas==2.3.3
+pillow==12.2.0
+astunparse==1.6.3
+autograd==1.8.0
+six==1.17.0
+pyparsing==3.3.2
+sympy==1.14.0
+einops==0.8.2
+alive-progress==3.3.0
+
+# JittorGeometric is not published on PyPI. Install it from GitHub:
+# git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 clone --depth 1 https://github.com/AlgRUC/JittorGeometric.git /tmp/JittorGeometric
+# python -m pip install /tmp/JittorGeometric

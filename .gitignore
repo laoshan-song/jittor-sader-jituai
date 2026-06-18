@@ -1,0 +1,11 @@
+.venv/
+.home/
+.cache/
+.jittor_home/
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+runs/
+checkpoints/
+*.log
