@@ -63,9 +63,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reg", type=float, default=1e-6)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--mf-weight", type=float, default=1.0)
+    parser.add_argument("--mf-weight-grid", default="0,0.25,0.5,1,1.5,2,3,4,6,8,12")
+    parser.add_argument("--negatives-per-positive", type=int, default=2)
+    parser.add_argument("--hard-negative-ratio", type=float, default=0.5)
     parser.add_argument("--temperature", type=float, default=2.0)
     parser.add_argument("--uniform-mix", type=float, default=0.02)
     parser.add_argument("--validate-samples", type=int, default=30000)
+    parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--skip-validation", action="store_true")
     return parser.parse_args()
 
@@ -134,6 +138,28 @@ def sample_indices(cdf: np.ndarray, batch_size: int, rng: np.random.Generator) -
     return np.searchsorted(cdf, rng.random(batch_size), side="right")
 
 
+def sample_negative_items(
+    train_items: np.ndarray,
+    popular_items: np.ndarray,
+    popular_probs: np.ndarray,
+    shape: tuple[int, ...],
+    hard_negative_ratio: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if not 0 <= hard_negative_ratio <= 1:
+        raise ValueError("--hard-negative-ratio must be in [0, 1].")
+
+    if hard_negative_ratio == 0 or len(popular_items) == 0:
+        return rng.choice(train_items, size=shape, replace=True)
+    if hard_negative_ratio == 1:
+        return rng.choice(popular_items, size=shape, replace=True, p=popular_probs)
+
+    uniform_neg = rng.choice(train_items, size=shape, replace=True)
+    hard_neg = rng.choice(popular_items, size=shape, replace=True, p=popular_probs)
+    mask = rng.random(shape) < hard_negative_ratio
+    return np.where(mask, hard_neg, uniform_neg)
+
+
 def train_mf(
     rows: list[tuple[int, int, int]],
     user_to_idx: dict[int, int],
@@ -150,6 +176,10 @@ def train_mf(
     times = np.array([time_value for _, _, time_value in rows], dtype=np.int64)
     cdf = recency_cdf(times)
     train_items = np.array(sorted(set(dst_idx.tolist())), dtype=np.int64)
+    item_counts = np.bincount(dst_idx, minlength=len(item_to_idx)).astype(np.float64)
+    popular_items = np.flatnonzero(item_counts)
+    popular_probs = item_counts[popular_items] ** 0.75
+    popular_probs /= popular_probs.sum()
     steps_per_epoch = max(1, math.ceil(len(rows) / args.batch_size))
 
     for epoch in range(1, args.epochs + 1):
@@ -158,16 +188,24 @@ def train_mf(
             batch = sample_indices(cdf, args.batch_size, rng)
             users = torch.from_numpy(src_idx[batch]).to(device)
             pos_items = torch.from_numpy(dst_idx[batch]).to(device)
-            neg_items_np = rng.choice(train_items, size=len(batch), replace=True)
+            neg_items_np = sample_negative_items(
+                train_items,
+                popular_items,
+                popular_probs,
+                (len(batch), args.negatives_per_positive),
+                args.hard_negative_ratio,
+                rng,
+            )
             neg_items = torch.from_numpy(neg_items_np).to(device)
 
             pos_scores = model.score(users, pos_items)
-            neg_scores = model.score(users, neg_items)
-            loss = -F.logsigmoid(pos_scores - neg_scores).mean()
+            flat_users = users[:, None].expand_as(neg_items).reshape(-1)
+            neg_scores = model.score(flat_users, neg_items.reshape(-1)).reshape_as(neg_items)
+            loss = -F.logsigmoid(pos_scores[:, None] - neg_scores).mean()
             reg = (
                 model.user_emb(users).pow(2).sum(dim=1)
                 + model.item_emb(pos_items).pow(2).sum(dim=1)
-                + model.item_emb(neg_items).pow(2).sum(dim=1)
+                + model.item_emb(neg_items.reshape(-1)).pow(2).sum(dim=1).reshape_as(neg_items).mean(dim=1)
             ).mean()
             loss = loss + args.reg * reg
 
@@ -243,23 +281,35 @@ def evaluate_validation(
         popular_negatives=20,
     )
     user_emb, item_emb, item_bias = embeddings
+    cases = []
+    for src, dst, time_value in valid_rows:
+        candidates = sampled_candidates(
+            dst,
+            all_dsts,
+            src_candidates.get(src, []),
+            all_test_candidates,
+            popular_dsts,
+            candidate_args,
+            rng,
+        )
+        heuristic_scores = [heuristic.score(src, cand, time_value) for cand in candidates]
+        model_scores = mf_scores(
+            src,
+            candidates,
+            user_to_idx,
+            item_to_idx,
+            user_emb,
+            item_emb,
+            item_bias,
+        )
+        cases.append((dst, candidates, heuristic_scores, model_scores))
 
     best_mrr = -1.0
     best_weight = args.mf_weight
-    for mf_weight in [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0]:
+    weight_grid = [float(value) for value in args.mf_weight_grid.split(",") if value.strip()]
+    for mf_weight in weight_grid:
         total_rr = 0.0
-        for src, dst, time_value in valid_rows:
-            candidates = sampled_candidates(
-                dst,
-                all_dsts,
-                src_candidates.get(src, []),
-                all_test_candidates,
-                popular_dsts,
-                candidate_args,
-                rng,
-            )
-            heuristic_scores = [heuristic.score(src, cand, time_value) for cand in candidates]
-            model_scores = mf_scores(src, candidates, user_to_idx, item_to_idx, user_emb, item_emb, item_bias)
+        for dst, candidates, heuristic_scores, model_scores in cases:
             scores = blend_scores(heuristic_scores, model_scores, mf_weight)
             ranked = sorted(zip(scores, candidates), reverse=True)
             for rank, (_, cand) in enumerate(ranked, start=1):
@@ -267,7 +317,7 @@ def evaluate_validation(
                     total_rr += 1.0 / rank
                     break
 
-        mrr = total_rr / len(valid_rows)
+        mrr = total_rr / len(cases)
         print(f"validation mf_weight={mf_weight:.2f} mrr={mrr:.8f}", flush=True)
         if mrr > best_mrr:
             best_mrr = mrr
@@ -344,6 +394,8 @@ def main() -> None:
                         embeddings,
                         args,
                     )
+                    if args.validate_only:
+                        continue
                     train_rows, _, users, items = read_scene_rows(data_zip, scene, None)
                     user_to_idx, item_to_idx = build_mappings(users, items)
                     heuristic = build_heuristic(train_rows)
