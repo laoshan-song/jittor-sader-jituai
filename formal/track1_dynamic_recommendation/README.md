@@ -64,3 +64,42 @@ result.zip
 ```
 
 生成的 `outputs/`、`*.csv` 和 `*.zip` 文件默认不会提交到 Git。
+
+## Local Evaluation
+
+本地评估分为两层，避免只看一个会过拟合的 proxy：
+
+1. `evaluate_submission.py` 审计已生成的提交包。它不需要标签，不估计线上
+   MRR，而是检查格式、概率塌缩、排序熵、与稳定 baseline 的 top1/top10 差异。
+2. `offline_eval.py` 从 `train.csv` 内部构造时间切分和候选集，计算带标签的
+   MRR/Hit@K。这个指标只作为代理分数，需要同时看不同 split 和 candidate
+   strategy。
+
+提交包审计示例：
+
+```bash
+python formal/track1_dynamic_recommendation/evaluate_submission.py \
+  --data-zip ../data_A.zip \
+  --baseline-zip outputs/track1/result_sequence.zip \
+  --submissions \
+    outputs/track1/result_sequence.zip \
+    outputs/track1/result_mf_conservative_rank_w1.zip \
+    outputs/track1/result_mf_conservative_rank_w2.zip \
+    outputs/track1/result_mf_final.zip \
+    outputs/track1/result_mf_hardneg_final.zip \
+  --output-json outputs/track1/submission_audit.json
+```
+
+离线代理 MRR 示例：
+
+```bash
+python formal/track1_dynamic_recommendation/offline_eval.py \
+  --data-zip ../data_A.zip \
+  --sample-positives 1000 \
+  --splits temporal,official \
+  --candidate-strategies mixed,hard \
+  --output-json outputs/track1/offline_eval_core_sample.json
+```
+
+注意：`dataset2` 的 official split 与正式测试候选分布不同，曾经把 hard-negative
+MF 的本地验证推高但线上变差。因此本地 MRR 不能单独作为提交依据。
