@@ -10,10 +10,12 @@ obviously unsafe submissions, and keep a clear trail of what changed.
 Each experiment should follow the same loop:
 
 1. Pick one narrow hypothesis.
-2. Run one command that produces a submission zip.
+2. Run one one-GPU command that produces a submission zip.
 3. Check the zip format and rank-quality guardrails.
-4. Record the command, parameters, artifacts, and metrics.
-5. Promote only one candidate for online submission.
+4. Compare the candidate with calibrated online indicators.
+5. Record the command, parameters, artifacts, and metrics.
+6. If the candidate looks like a large improvement, stop and ask for an online
+   submission instead of continuing to consume the daily limit blindly.
 
 ## Guardrails
 
@@ -30,6 +32,8 @@ Required checks:
   where most rows collapse to one high value and 99 identical low values.
 - Ranking should not drift too far from `result_sequence.zip` unless there is a
   clear reason and an online score confirms the direction.
+- Calibrated metrics from `calibrate_online.py` should not regress, especially
+  `avg_distinct`, `avg_entropy`, and `avg_max_probability`.
 
 ## Safe Search Space
 
@@ -50,9 +54,21 @@ Prefer the candidate with:
 
 1. Valid format.
 2. 100 distinct probabilities per row on average.
-3. Higher agreement with the stable sequence baseline when no online evidence
-   says otherwise.
-4. Smaller model weight when two candidates look similar.
+3. Higher entropy and lower max-probability concentration.
+4. No extreme drift from known stable submissions.
+5. Smaller model weight when two candidates look similar.
 
 Daily submissions are limited, so the runner should create candidates, but a
 human should choose the actual upload after inspecting the summary.
+
+## GPU Rule
+
+Use exactly one GPU per training process by default:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python ...
+```
+
+Do not occupy multiple cards with one light experiment. Parallel experiments are
+allowed only as separate one-GPU jobs, and only when each job keeps its assigned
+card busy enough to justify using another card.

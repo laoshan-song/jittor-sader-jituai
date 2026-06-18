@@ -1,0 +1,5 @@
+submission,online_score,notes
+result.zip,1.0006084897236325,initial baseline submission
+result_mf_hardneg_final.zip,0.9341981811602418,overfit hard-negative MF
+result_mf_final.zip,1.090700648529504,softmax MF blend
+result_mf_conservative_rank_w1.zip,1.1099002959299407,rank-preserving conservative MF blend
