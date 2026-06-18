@@ -35,18 +35,28 @@ class HistoryBaseline:
         pair_recency_weight: float,
         dst_pop_weight: float,
         dst_recency_weight: float,
+        sequence_weight: float,
+        repeat_recent_weight: float,
     ) -> None:
         self.pair_weight = pair_weight
         self.pair_recency_weight = pair_recency_weight
         self.dst_pop_weight = dst_pop_weight
         self.dst_recency_weight = dst_recency_weight
+        self.sequence_weight = sequence_weight
+        self.repeat_recent_weight = repeat_recent_weight
         self.src_dst_count: dict[int, Counter[int]] = defaultdict(Counter)
         self.src_dst_last_time: dict[int, dict[int, int]] = defaultdict(dict)
+        self.src_history: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        self.src_recent_dsts: dict[int, list[int]] = {}
+        self.transition_count: dict[int, Counter[int]] = defaultdict(Counter)
         self.dst_count: Counter[int] = Counter()
         self.dst_last_time: dict[int, int] = {}
+        self.recent_dst_count: Counter[int] = Counter()
         self.min_time: int | None = None
         self.max_time: int | None = None
         self.max_dst_log = 1.0
+        self.max_recent_dst_log = 1.0
+        self.max_transition_log = 1.0
         self.time_scale = 1.0
         self.train_rows = 0
 
@@ -57,6 +67,7 @@ class HistoryBaseline:
             time_value,
             self.src_dst_last_time[src].get(dst, time_value),
         )
+        self.src_history[src].append((time_value, dst))
         self.dst_count[dst] += 1
         self.dst_last_time[dst] = max(time_value, self.dst_last_time.get(dst, time_value))
 
@@ -73,6 +84,38 @@ class HistoryBaseline:
 
         time_span = max(1, self.max_time - self.min_time)
         self.time_scale = max(1.0, time_span / 20.0)
+        recent_cutoff = self.max_time - time_span // 20
+        self.recent_dst_count = Counter()
+
+        # The recent counter is filled lazily from pair last times. This is an
+        # approximation, but it is cheap and useful for candidate reranking.
+        for last_times in self.src_dst_last_time.values():
+            for dst, last_time in last_times.items():
+                if last_time >= recent_cutoff:
+                    self.recent_dst_count[dst] += 1
+
+        self.max_recent_dst_log = max(
+            (math.log1p(value) for value in self.recent_dst_count.values()),
+            default=1.0,
+        )
+        self._build_sequence_features()
+
+    def _build_sequence_features(self) -> None:
+        max_transition = 1
+        for src, history in self.src_history.items():
+            history.sort()
+            dst_sequence = [dst for _, dst in history]
+            self.src_recent_dsts[src] = dst_sequence[-20:]
+
+            for index, dst in enumerate(dst_sequence):
+                start = max(0, index - 5)
+                for prev_dst in dst_sequence[start:index]:
+                    if prev_dst == dst:
+                        continue
+                    self.transition_count[prev_dst][dst] += 1
+                    max_transition = max(max_transition, self.transition_count[prev_dst][dst])
+
+        self.max_transition_log = math.log1p(max_transition)
 
     def score(self, src: int, dst: int, query_time: int) -> float:
         src_counts = self.src_dst_count.get(src)
@@ -91,6 +134,31 @@ class HistoryBaseline:
                 query_time,
                 self.dst_last_time.get(dst),
             )
+
+        recent_count = self.recent_dst_count.get(dst, 0)
+        if recent_count:
+            score += 0.6 * math.log1p(recent_count) / self.max_recent_dst_log
+
+        recent_dsts = self.src_recent_dsts.get(src, [])
+        if recent_dsts:
+            if dst in recent_dsts[-10:]:
+                distance = len(recent_dsts) - 1 - max(
+                    index for index, value in enumerate(recent_dsts) if value == dst
+                )
+                score += self.repeat_recent_weight / (1.0 + distance)
+
+            transition_score = 0.0
+            for offset, prev_dst in enumerate(reversed(recent_dsts[-10:]), start=1):
+                transition_score += (
+                    self.transition_count.get(prev_dst, {}).get(dst, 0)
+                    / offset
+                )
+            if transition_score:
+                score += (
+                    self.sequence_weight
+                    * math.log1p(transition_score)
+                    / self.max_transition_log
+                )
 
         score += self._stable_tie_break(src, dst)
         return score
@@ -114,6 +182,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pair-recency-weight", type=float, default=3.0)
     parser.add_argument("--dst-pop-weight", type=float, default=0.8)
     parser.add_argument("--dst-recency-weight", type=float, default=0.4)
+    parser.add_argument("--sequence-weight", type=float, default=1.2)
+    parser.add_argument("--repeat-recent-weight", type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=2.0)
     parser.add_argument("--uniform-mix", type=float, default=0.02)
     parser.add_argument("--limit-test-rows", type=int, default=0)
@@ -148,6 +218,8 @@ def fit_scene_model(
         pair_recency_weight=args.pair_recency_weight,
         dst_pop_weight=args.dst_pop_weight,
         dst_recency_weight=args.dst_recency_weight,
+        sequence_weight=args.sequence_weight,
+        repeat_recent_weight=args.repeat_recent_weight,
     )
 
     with open_csv(data_zip, f"{scene}/train.csv") as file:
