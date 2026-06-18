@@ -1,0 +1,374 @@
+"""GPU matrix-factorization reranker for Track 1.
+
+This script trains a BPR matrix-factorization model per scene with PyTorch,
+then blends model scores with the heuristic history baseline. It is intended
+for leaderboard runs on the provided GPU server.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import io
+import math
+import random
+import zipfile
+from collections import Counter, defaultdict
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+from baseline import HistoryBaseline, probabilities
+from validate_heuristic import load_test_candidate_pools, sampled_candidates
+
+
+HEURISTIC_WEIGHTS = {
+    "pair_weight": 6.0,
+    "pair_recency_weight": 4.0,
+    "dst_pop_weight": 0.4,
+    "dst_recency_weight": 0.2,
+    "sequence_weight": 2.5,
+    "repeat_recent_weight": 2.0,
+}
+
+
+class MFModel(nn.Module):
+    def __init__(self, num_users: int, num_items: int, dim: int) -> None:
+        super().__init__()
+        self.user_emb = nn.Embedding(num_users, dim)
+        self.item_emb = nn.Embedding(num_items, dim)
+        self.item_bias = nn.Embedding(num_items, 1)
+        nn.init.normal_(self.user_emb.weight, std=0.02)
+        nn.init.normal_(self.item_emb.weight, std=0.02)
+        nn.init.zeros_(self.item_bias.weight)
+
+    def score(self, users: torch.Tensor, items: torch.Tensor) -> torch.Tensor:
+        return (self.user_emb(users) * self.item_emb(items)).sum(dim=1) + self.item_bias(items).squeeze(1)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train MF reranker and write result.zip")
+    parser.add_argument("--data-zip", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=Path("outputs/track1/result_mf.zip"))
+    parser.add_argument("--scenes", default="dataset1,dataset2")
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--dim", type=int, default=96)
+    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=65536)
+    parser.add_argument("--lr", type=float, default=0.03)
+    parser.add_argument("--reg", type=float, default=1e-6)
+    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--mf-weight", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=2.0)
+    parser.add_argument("--uniform-mix", type=float, default=0.02)
+    parser.add_argument("--validate-samples", type=int, default=30000)
+    parser.add_argument("--skip-validation", action="store_true")
+    return parser.parse_args()
+
+
+def open_csv(data_zip: zipfile.ZipFile, member: str) -> io.TextIOWrapper:
+    return io.TextIOWrapper(data_zip.open(member, "r"), encoding="utf-8", newline="")
+
+
+def read_scene_rows(
+    data_zip: zipfile.ZipFile,
+    scene: str,
+    train_split: str | None,
+) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]], set[int], set[int]]:
+    train_rows: list[tuple[int, int, int]] = []
+    valid_rows: list[tuple[int, int, int]] = []
+    users: set[int] = set()
+    items: set[int] = set()
+
+    with open_csv(data_zip, f"{scene}/train.csv") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            src = int(row["src"])
+            dst = int(row["dst"])
+            time_value = int(row["time"])
+            users.add(src)
+            items.add(dst)
+            if train_split is not None and row.get("split") != train_split:
+                valid_rows.append((src, dst, time_value))
+            else:
+                train_rows.append((src, dst, time_value))
+
+    with open_csv(data_zip, f"{scene}/test.csv") as file:
+        reader = csv.reader(file)
+        next(reader)
+        for row in reader:
+            users.add(int(row[0]))
+            items.update(int(value) for value in row[2:])
+
+    return train_rows, valid_rows, users, items
+
+
+def build_heuristic(rows: list[tuple[int, int, int]]) -> HistoryBaseline:
+    model = HistoryBaseline(**HEURISTIC_WEIGHTS)
+    for src, dst, time_value in rows:
+        model.update(src, dst, time_value)
+    model.finalize()
+    return model
+
+
+def build_mappings(users: set[int], items: set[int]) -> tuple[dict[int, int], dict[int, int]]:
+    return (
+        {value: index for index, value in enumerate(sorted(users))},
+        {value: index for index, value in enumerate(sorted(items))},
+    )
+
+
+def recency_cdf(times: np.ndarray) -> np.ndarray:
+    span = max(1, int(times.max()) - int(times.min()))
+    weights = 0.2 + 0.8 * ((times - times.min()) / span)
+    cdf = np.cumsum(weights, dtype=np.float64)
+    cdf /= cdf[-1]
+    return cdf
+
+
+def sample_indices(cdf: np.ndarray, batch_size: int, rng: np.random.Generator) -> np.ndarray:
+    return np.searchsorted(cdf, rng.random(batch_size), side="right")
+
+
+def train_mf(
+    rows: list[tuple[int, int, int]],
+    user_to_idx: dict[int, int],
+    item_to_idx: dict[int, int],
+    args: argparse.Namespace,
+) -> MFModel:
+    rng = np.random.default_rng(args.seed)
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    model = MFModel(len(user_to_idx), len(item_to_idx), args.dim).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
+
+    src_idx = np.array([user_to_idx[src] for src, _, _ in rows], dtype=np.int64)
+    dst_idx = np.array([item_to_idx[dst] for _, dst, _ in rows], dtype=np.int64)
+    times = np.array([time_value for _, _, time_value in rows], dtype=np.int64)
+    cdf = recency_cdf(times)
+    train_items = np.array(sorted(set(dst_idx.tolist())), dtype=np.int64)
+    steps_per_epoch = max(1, math.ceil(len(rows) / args.batch_size))
+
+    for epoch in range(1, args.epochs + 1):
+        total_loss = 0.0
+        for _ in range(steps_per_epoch):
+            batch = sample_indices(cdf, args.batch_size, rng)
+            users = torch.from_numpy(src_idx[batch]).to(device)
+            pos_items = torch.from_numpy(dst_idx[batch]).to(device)
+            neg_items_np = rng.choice(train_items, size=len(batch), replace=True)
+            neg_items = torch.from_numpy(neg_items_np).to(device)
+
+            pos_scores = model.score(users, pos_items)
+            neg_scores = model.score(users, neg_items)
+            loss = -F.logsigmoid(pos_scores - neg_scores).mean()
+            reg = (
+                model.user_emb(users).pow(2).sum(dim=1)
+                + model.item_emb(pos_items).pow(2).sum(dim=1)
+                + model.item_emb(neg_items).pow(2).sum(dim=1)
+            ).mean()
+            loss = loss + args.reg * reg
+
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            total_loss += float(loss.item())
+
+        print(f"epoch={epoch} loss={total_loss / steps_per_epoch:.6f}", flush=True)
+
+    return model.cpu()
+
+
+def export_embeddings(model: MFModel) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        model.user_emb.weight.detach().numpy(),
+        model.item_emb.weight.detach().numpy(),
+        model.item_bias.weight.detach().numpy().reshape(-1),
+    )
+
+
+def mf_scores(
+    src: int,
+    candidates: list[int],
+    user_to_idx: dict[int, int],
+    item_to_idx: dict[int, int],
+    user_emb: np.ndarray,
+    item_emb: np.ndarray,
+    item_bias: np.ndarray,
+) -> np.ndarray:
+    user_index = user_to_idx.get(src)
+    if user_index is None:
+        return np.zeros(len(candidates), dtype=np.float32)
+
+    user_vec = user_emb[user_index]
+    scores = np.zeros(len(candidates), dtype=np.float32)
+    for index, dst in enumerate(candidates):
+        item_index = item_to_idx.get(dst)
+        if item_index is not None:
+            scores[index] = float(user_vec @ item_emb[item_index] + item_bias[item_index])
+    return scores
+
+
+def blend_scores(heuristic_scores: list[float], mf_score_values: np.ndarray, mf_weight: float) -> list[float]:
+    mf_std = float(mf_score_values.std())
+    if mf_std > 1e-6:
+        mf_score_values = (mf_score_values - float(mf_score_values.mean())) / mf_std
+    else:
+        mf_score_values = mf_score_values * 0.0
+    return [h + mf_weight * float(m) for h, m in zip(heuristic_scores, mf_score_values)]
+
+
+def evaluate_validation(
+    data_zip: zipfile.ZipFile,
+    scene: str,
+    valid_rows: list[tuple[int, int, int]],
+    heuristic: HistoryBaseline,
+    user_to_idx: dict[int, int],
+    item_to_idx: dict[int, int],
+    embeddings: tuple[np.ndarray, np.ndarray, np.ndarray],
+    args: argparse.Namespace,
+) -> float:
+    rng = random.Random(args.seed)
+    if args.validate_samples and args.validate_samples < len(valid_rows):
+        valid_rows = rng.sample(valid_rows, args.validate_samples)
+
+    src_candidates, all_test_candidates = load_test_candidate_pools(data_zip, scene)
+    all_dsts = sorted(item_to_idx)
+    popular_dsts = [dst for dst, _ in Counter(heuristic.dst_count).most_common(5000)]
+    candidate_args = SimpleNamespace(
+        negatives=99,
+        src_test_negatives=60,
+        popular_negatives=20,
+    )
+    user_emb, item_emb, item_bias = embeddings
+
+    best_mrr = -1.0
+    best_weight = args.mf_weight
+    for mf_weight in [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0]:
+        total_rr = 0.0
+        for src, dst, time_value in valid_rows:
+            candidates = sampled_candidates(
+                dst,
+                all_dsts,
+                src_candidates.get(src, []),
+                all_test_candidates,
+                popular_dsts,
+                candidate_args,
+                rng,
+            )
+            heuristic_scores = [heuristic.score(src, cand, time_value) for cand in candidates]
+            model_scores = mf_scores(src, candidates, user_to_idx, item_to_idx, user_emb, item_emb, item_bias)
+            scores = blend_scores(heuristic_scores, model_scores, mf_weight)
+            ranked = sorted(zip(scores, candidates), reverse=True)
+            for rank, (_, cand) in enumerate(ranked, start=1):
+                if cand == dst:
+                    total_rr += 1.0 / rank
+                    break
+
+        mrr = total_rr / len(valid_rows)
+        print(f"validation mf_weight={mf_weight:.2f} mrr={mrr:.8f}", flush=True)
+        if mrr > best_mrr:
+            best_mrr = mrr
+            best_weight = mf_weight
+
+    args.mf_weight = best_weight
+    print(f"best validation mf_weight={best_weight:.2f} mrr={best_mrr:.8f}", flush=True)
+    return best_mrr
+
+
+def write_scene(
+    data_zip: zipfile.ZipFile,
+    output_zip: zipfile.ZipFile,
+    scene: str,
+    heuristic: HistoryBaseline,
+    user_to_idx: dict[int, int],
+    item_to_idx: dict[int, int],
+    embeddings: tuple[np.ndarray, np.ndarray, np.ndarray],
+    args: argparse.Namespace,
+) -> int:
+    user_emb, item_emb, item_bias = embeddings
+    rows = 0
+    with open_csv(data_zip, f"{scene}/test.csv") as input_file:
+        reader = csv.reader(input_file)
+        next(reader)
+        with output_zip.open(f"{scene}.csv", "w") as raw_output:
+            with io.TextIOWrapper(raw_output, encoding="utf-8", newline="") as text_output:
+                writer = csv.writer(text_output, lineterminator="\n")
+                for row in reader:
+                    src = int(row[0])
+                    time_value = int(row[1])
+                    candidates = [int(value) for value in row[2:]]
+                    heuristic_scores = [heuristic.score(src, dst, time_value) for dst in candidates]
+                    model_scores = mf_scores(src, candidates, user_to_idx, item_to_idx, user_emb, item_emb, item_bias)
+                    scores = blend_scores(heuristic_scores, model_scores, args.mf_weight)
+                    probs = probabilities(scores, args.temperature, args.uniform_mix)
+                    writer.writerow([f"{value:.8f}" for value in probs])
+                    rows += 1
+    return rows
+
+
+def main() -> None:
+    args = parse_args()
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(args.data_zip) as data_zip:
+        with zipfile.ZipFile(args.output, "w", compression=zipfile.ZIP_DEFLATED) as output_zip:
+            scenes = [scene.strip() for scene in args.scenes.split(",") if scene.strip()]
+            for scene in scenes:
+                print(f"[{scene}] loading", flush=True)
+                train_split = "0" if scene == "dataset2" and not args.skip_validation else None
+                train_rows, valid_rows, users, items = read_scene_rows(data_zip, scene, train_split)
+                user_to_idx, item_to_idx = build_mappings(users, items)
+                heuristic = build_heuristic(train_rows)
+
+                print(
+                    f"[{scene}] train_rows={len(train_rows)} "
+                    f"users={len(users)} items={len(items)}",
+                    flush=True,
+                )
+                mf_model = train_mf(train_rows, user_to_idx, item_to_idx, args)
+                embeddings = export_embeddings(mf_model)
+
+                if scene == "dataset2" and valid_rows and not args.skip_validation:
+                    evaluate_validation(
+                        data_zip,
+                        scene,
+                        valid_rows,
+                        heuristic,
+                        user_to_idx,
+                        item_to_idx,
+                        embeddings,
+                        args,
+                    )
+                    train_rows, _, users, items = read_scene_rows(data_zip, scene, None)
+                    user_to_idx, item_to_idx = build_mappings(users, items)
+                    heuristic = build_heuristic(train_rows)
+                    print(
+                        f"[{scene}] retraining on full data "
+                        f"with mf_weight={args.mf_weight:.2f}",
+                        flush=True,
+                    )
+                    mf_model = train_mf(train_rows, user_to_idx, item_to_idx, args)
+                    embeddings = export_embeddings(mf_model)
+
+                rows = write_scene(
+                    data_zip,
+                    output_zip,
+                    scene,
+                    heuristic,
+                    user_to_idx,
+                    item_to_idx,
+                    embeddings,
+                    args,
+                )
+                print(f"[{scene}] wrote {rows} rows", flush=True)
+
+    print(f"submission saved to {args.output}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
