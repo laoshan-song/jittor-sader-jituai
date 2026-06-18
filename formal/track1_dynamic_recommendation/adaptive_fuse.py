@@ -14,7 +14,7 @@ import io
 import zipfile
 from pathlib import Path
 
-from train_mf_rerank import rank_probabilities
+from rank_utils import rank_probabilities
 
 
 SCENES = ("dataset1", "dataset2")

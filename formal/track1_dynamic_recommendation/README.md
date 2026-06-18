@@ -50,9 +50,12 @@ data_A.zip
 从仓库根目录运行：
 
 ```bash
-python formal/track1_dynamic_recommendation/baseline.py \
+python formal/track1_dynamic_recommendation/train_jittor_mf.py \
   --data-zip ../data_A.zip \
-  --output outputs/track1/result.zip
+  --output outputs/track1/result.zip \
+  --epochs 6 \
+  --mf-weight 1 \
+  --probability-mode rank
 ```
 
 输出文件结构：
@@ -64,6 +67,29 @@ result.zip
 ```
 
 生成的 `outputs/`、`*.csv` 和 `*.zip` 文件默认不会提交到 Git。
+
+`train_jittor_mf.py` 是正式复现入口，基于 Jittor 训练 BPR
+matrix-factorization reranker，并融合历史/序列统计特征生成提交文件。
+`baseline.py` 是无需训练的规则 baseline，`train_mf_rerank.py` 仅作为
+早期 PyTorch 探索脚本保留，不作为代码审核复现主路径。
+
+快速自检命令：
+
+```bash
+python formal/track1_dynamic_recommendation/train_jittor_mf.py \
+  --data-zip ../data_A.zip \
+  --output outputs/track1/jittor_smoke.zip \
+  --scenes dataset1 \
+  --epochs 1 \
+  --dim 8 \
+  --batch-size 1024 \
+  --limit-train-rows 10000 \
+  --limit-test-rows 100 \
+  --cpu
+```
+
+服务器无外网时，Jittor 首次 CUDA 编译可能需要离线补齐 cutt 缓存。推荐将
+`JITTOR_HOME`、`XDG_CACHE_HOME`、模型和输出都放在数据盘目录，避免写入 home。
 
 ## Local Evaluation
 

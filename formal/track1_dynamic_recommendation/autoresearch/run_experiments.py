@@ -42,7 +42,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run conservative Track 1 experiments")
     parser.add_argument("--data-zip", type=Path, required=True)
     parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/track1/autoresearch"))
     parser.add_argument("--logs-dir", type=Path, default=Path("logs/track1_autoresearch"))
     parser.add_argument("--records", type=Path, default=Path("outputs/track1/autoresearch/records.jsonl"))
@@ -53,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=65536)
     parser.add_argument("--lr", type=float, default=0.03)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -145,15 +145,13 @@ def compare_with_baseline(zip_path: Path, baseline_zip: Path) -> dict[str, Agree
 def command_for_weight(args: argparse.Namespace, weight: float, output_zip: Path) -> list[str]:
     return [
         args.python,
-        "formal/track1_dynamic_recommendation/train_mf_rerank.py",
+        "formal/track1_dynamic_recommendation/train_jittor_mf.py",
         "--data-zip",
         str(args.data_zip),
         "--output",
         str(output_zip),
         "--scenes",
         "dataset1,dataset2",
-        "--device",
-        args.device,
         "--dim",
         str(args.dim),
         "--epochs",
@@ -174,8 +172,7 @@ def command_for_weight(args: argparse.Namespace, weight: float, output_zip: Path
         "0",
         "--probability-mode",
         "rank",
-        "--skip-validation",
-    ]
+    ] + (["--cpu"] if args.cpu else [])
 
 
 def run_command(command: list[str], log_path: Path) -> int:
