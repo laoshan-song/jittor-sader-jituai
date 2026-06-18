@@ -1,174 +1,195 @@
-'''热身赛一：基于 GCN 的 Cora 节点分类任务。'''
+"""Warm-up 1: Cora node classification with a two-layer GCN."""
 
-import os.path as osp
+from __future__ import annotations
+
+import argparse
 import json
 import pickle
+import random
+from pathlib import Path
 
 import jittor as jt
 from jittor import nn
 import numpy as np
 from jittor_geometric.nn import GCNConv
-from jittor_geometric.ops import cootocsr, cootocsc
 from jittor_geometric.nn.conv.gcn_conv import gcn_norm
+from jittor_geometric.ops import cootocsc, cootocsr
 
 
-# ============================================================
-# 基本配置
-# ============================================================
-jt.flags.use_cuda = 1 if jt.has_cuda else 0
-jt.misc.set_global_seed(42)
+DEFAULT_DATA_PATH = Path(__file__).resolve().parent / "data" / "cora.pkl"
+DEFAULT_OUTPUT_PATH = Path("result.json")
 
-# ============================================================
-# 第一步：加载数据集
-# ============================================================
-base_dir = osp.dirname(osp.abspath(__file__))
-data_path = osp.join(base_dir, 'data', 'cora.pkl')
 
-with open(data_path, 'rb') as f:
-    raw = pickle.load(f)
-
-# 将 numpy 数据转为 jittor 张量，构造 data 对象
 class GraphData:
-    pass
+    """Container for graph tensors and sparse adjacency formats."""
 
-data = GraphData()
-data.x = jt.array(raw['x'].astype(np.float32))
-data.y = jt.array(raw['y'].astype(np.int64))
-data.edge_index = jt.array(raw['edge_index'].astype(np.int64))
-data.train_mask = jt.array(raw['train_mask'])
-data.val_mask = jt.array(raw['val_mask'])
-data.test_mask = jt.array(raw['test_mask'])
-num_features = raw['num_features']
-num_classes = raw['num_classes']
 
-# 对特征做行归一化（等同于 T.NormalizeFeatures()）
-row_sum = data.x.sum(dim=1, keepdims=True)
-row_sum = jt.clamp(row_sum, min_v=1e-12)
-data.x = data.x / row_sum
-
-# ============================================================
-# 第二步：图的边归一化 + 稀疏格式转换
-# ============================================================
-v_num = data.x.shape[0]
-edge_index, edge_weight = data.edge_index, None
-
-edge_index, edge_weight = gcn_norm(
-    edge_index, edge_weight, v_num,
-    improved=False, add_self_loops=True
-)
-
-# 将 COO 格式转换为 CSC 和 CSR 稀疏矩阵格式
-with jt.no_grad():
-    data.csc = cootocsc(edge_index, edge_weight, v_num)
-    data.csr = cootocsr(edge_index, edge_weight, v_num)
-
-# ============================================================
-# 第三步：定义 GCN 模型
-# ============================================================
 class GCNNet(nn.Module):
-    def __init__(self, num_features, num_classes, hidden_dim=256, dropout=0.8):
-        super(GCNNet, self).__init__()
+    """Two-layer GCN for semi-supervised node classification."""
+
+    def __init__(
+        self,
+        num_features: int,
+        num_classes: int,
+        hidden_dim: int,
+        dropout: float,
+        use_spmm: bool,
+    ) -> None:
+        super().__init__()
         self.dropout = dropout
+        self.conv1 = GCNConv(num_features, hidden_dim, spmm=use_spmm)
+        self.conv2 = GCNConv(hidden_dim, num_classes, spmm=use_spmm)
 
-        # 定义两层 GCN 卷积层
-        # 提示：GCNConv(in_channels, out_channels)
-        self.conv1 = GCNConv(num_features, hidden_dim, spmm=bool(jt.flags.use_cuda))
-        self.conv2 = GCNConv(hidden_dim, num_classes, spmm=bool(jt.flags.use_cuda))
-
-    def execute(self):
-        x, csc, csr = data.x, data.csc, data.csr
-
-        # 实现前向传播
-        # 1. 第一层 GCN 卷积 + ReLU 激活
-        # 2. Dropout
-        # 3. 第二层 GCN 卷积
-        x = nn.relu(self.conv1(x, csc, csr))
+    def execute(self, graph: GraphData) -> jt.Var:
+        """Return logits with shape [num_nodes, num_classes]."""
+        x = nn.relu(self.conv1(graph.x, graph.csc, graph.csr))
         x = nn.dropout(x, self.dropout, is_train=self.training)
-        x = self.conv2(x, csc, csr)
+        return self.conv2(x, graph.csc, graph.csr)
 
-        return x
 
-# 初始化模型和优化器
-model = GCNNet(
-    num_features=num_features,
-    num_classes=num_classes,
-    hidden_dim=256,
-    dropout=0.8
-)
-optimizer = nn.Adam(params=model.parameters(), lr=0.01, weight_decay=5e-4)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train a GCN on Cora and write warm-up predictions."
+    )
+    parser.add_argument("--data-path", type=Path, default=DEFAULT_DATA_PATH)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--dropout", type=float, default=0.8)
+    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--weight-decay", type=float, default=5e-4)
+    parser.add_argument("--log-interval", type=int, default=20)
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU execution even when Jittor reports CUDA is available.",
+    )
+    return parser.parse_args()
 
-# ============================================================
-# 第四步：定义训练函数
-# ============================================================
-def train():
+
+def set_seed(seed: int) -> None:
+    """Set Python, NumPy, and Jittor random seeds."""
+    random.seed(seed)
+    np.random.seed(seed)
+    jt.misc.set_global_seed(seed)
+
+
+def load_raw_data(data_path: Path) -> dict:
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Dataset not found: {data_path}\n"
+            "Download or copy the competition release file to "
+            "warmups/cora_gcn/data/cora.pkl, or pass --data-path."
+        )
+
+    with data_path.open("rb") as file:
+        return pickle.load(file)
+
+
+def build_graph(raw_data: dict) -> GraphData:
+    """Convert raw Cora arrays into Jittor tensors and sparse graph formats."""
+    graph = GraphData()
+    graph.x = jt.array(raw_data["x"].astype(np.float32))
+    graph.y = jt.array(raw_data["y"].astype(np.int64))
+    graph.edge_index = jt.array(raw_data["edge_index"].astype(np.int64))
+    graph.train_mask = jt.array(raw_data["train_mask"])
+    graph.val_mask = jt.array(raw_data["val_mask"])
+    graph.test_mask = jt.array(raw_data["test_mask"])
+
+    row_sum = jt.clamp(graph.x.sum(dim=1, keepdims=True), min_v=1e-12)
+    graph.x = graph.x / row_sum
+
+    num_nodes = graph.x.shape[0]
+    edge_index, edge_weight = gcn_norm(
+        graph.edge_index,
+        None,
+        num_nodes,
+        improved=False,
+        add_self_loops=True,
+    )
+
+    with jt.no_grad():
+        graph.csc = cootocsc(edge_index, edge_weight, num_nodes)
+        graph.csr = cootocsr(edge_index, edge_weight, num_nodes)
+
+    return graph
+
+
+def train_one_epoch(model: GCNNet, graph: GraphData, optimizer: nn.Optimizer) -> float:
     model.train()
-
-    # 1. 前向传播
-    pred = model()[data.train_mask]
-
-    label = data.y[data.train_mask]
-    loss = nn.cross_entropy_loss(pred, label)
+    logits = model(graph)[graph.train_mask]
+    labels = graph.y[graph.train_mask]
+    loss = nn.cross_entropy_loss(logits, labels)
     optimizer.step(loss)
     return float(loss.item())
 
-# ============================================================
-# 第五步：定义测试函数
-# ============================================================
-def test():
+
+def evaluate(model: GCNNet, graph: GraphData) -> tuple[float, float]:
     model.eval()
-    logits = model()
-    accs = []
+    logits = model(graph)
+    scores = []
 
-    for mask in [data.train_mask, data.val_mask]:
-        # 实现预测和准确率计算
-        # 1. 使用 jt.argmax 获取预测类别
+    for mask in [graph.train_mask, graph.val_mask]:
         pred, _ = jt.argmax(logits[mask], dim=1)
-        # 2. 计算预测准确率
-        label = data.y[mask]
-        acc = float((pred == label).float32().mean().item())
-        accs.append(acc)
+        labels = graph.y[mask]
+        scores.append(float((pred == labels).float32().mean().item()))
 
-    return accs
+    return scores[0], scores[1]
 
-# ============================================================
-# 第六步：训练模型
-# ============================================================
-best_val_acc = 0
 
-for epoch in range(1, 201):
-    loss = train()
-    train_acc, val_acc = test()
+def save_predictions(model: GCNNet, graph: GraphData, raw_data: dict, output: Path) -> int:
+    model.eval()
+    logits = model(graph)
+    pred, _ = jt.argmax(logits, dim=1)
+    test_indices = np.where(raw_data["test_mask"])[0]
 
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
+    result = {str(int(index)): int(pred[int(index)].item()) for index in test_indices}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as file:
+        json.dump(result, file, indent=2)
 
-    if epoch % 20 == 0:
-        log = 'Epoch: {:03d}, Loss: {:.4f}, Train Acc: {:.4f}, Best Val Acc: {:.4f}'
-        print(log.format(epoch, loss, train_acc, best_val_acc))
+    return len(result)
 
-print(f'\n最终结果: Val Acc: {best_val_acc:.4f}')
 
-# ============================================================
-# 第七步：生成并保存预测结果
-# ============================================================
-model.eval()
+def main() -> None:
+    args = parse_args()
+    jt.flags.use_cuda = 0 if args.cpu or not jt.has_cuda else 1
+    set_seed(args.seed)
 
-# 1. 使用训练好的模型对所有节点进行预测
-logits = model()
-pred, _ = jt.argmax(logits, dim=1)
+    raw_data = load_raw_data(args.data_path)
+    graph = build_graph(raw_data)
+    model = GCNNet(
+        num_features=int(raw_data["num_features"]),
+        num_classes=int(raw_data["num_classes"]),
+        hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+        use_spmm=bool(jt.flags.use_cuda),
+    )
+    optimizer = nn.Adam(
+        params=model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
 
-# 2. 提取测试集节点的预测类别
-test_indices = np.where(raw['test_mask'])[0]
+    best_val_acc = 0.0
+    for epoch in range(1, args.epochs + 1):
+        loss = train_one_epoch(model, graph, optimizer)
+        train_acc, val_acc = evaluate(model, graph)
+        best_val_acc = max(best_val_acc, val_acc)
 
-# 3. 构建字典 {节点编号: 预测类别}
-result = {}
-for idx in test_indices:
-    result[str(int(idx))] = int(pred[int(idx)].item())
+        if epoch % args.log_interval == 0 or epoch == args.epochs:
+            print(
+                "Epoch: "
+                f"{epoch:03d}, Loss: {loss:.4f}, Train Acc: {train_acc:.4f}, "
+                f"Best Val Acc: {best_val_acc:.4f}"
+            )
 
-# 4. 保存为 result.json
-output_path = 'result.json'
-with open(output_path, 'w') as f:
-    json.dump(result, f, indent=2)
+    print(f"\nFinal Val Acc: {best_val_acc:.4f}")
+    count = save_predictions(model, graph, raw_data, args.output)
+    print(f"Predictions saved to {args.output}")
+    print(f"Predicted {count} test nodes")
 
-print(f"预测结果已保存到 {output_path}")
-print(f"共预测 {len(result)} 个测试节点")
+
+if __name__ == "__main__":
+    main()

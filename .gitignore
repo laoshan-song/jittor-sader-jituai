@@ -8,4 +8,15 @@ __pycache__/
 .pytest_cache/
 runs/
 checkpoints/
+outputs/
 *.log
+
+# Data, weights, and generated artifacts are kept out of the open-source repo.
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+result.json
+submissions/*.zip

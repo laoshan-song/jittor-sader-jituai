@@ -27,7 +27,9 @@ def main() -> None:
                 "        from jittor.compile_extern import cusparse_ops\n",
                 "    def execute(self,x,csr,trans_A,trans_B):\n"
                 "        if not jt.has_cuda:\n"
-                "            raise RuntimeError(\"SpmmCsr requires CUDA/cusparse. Use the CPU aggregate path instead.\")\n"
+                "            raise RuntimeError("
+                "\"SpmmCsr requires CUDA/cusparse. "
+                "Use the CPU aggregate path instead.\")\n"
                 "        jt.flags.use_cuda = 1\n"
                 "        from jittor.compile_extern import cusparse_ops\n",
             ),
@@ -52,7 +54,9 @@ def main() -> None:
                 "        from jittor.compile_extern import cusparse_ops\n",
                 "    def execute(self,x,edge_index,edge_weight,trans_A,trans_B):\n"
                 "        if not jt.has_cuda:\n"
-                "            raise RuntimeError(\"SpmmCoo requires CUDA/cusparse. Use a CPU aggregation path instead.\")\n"
+                "            raise RuntimeError("
+                "\"SpmmCoo requires CUDA/cusparse. "
+                "Use a CPU aggregation path instead.\")\n"
                 "        jt.flags.use_cuda = 1\n"
                 "        from jittor.compile_extern import cusparse_ops\n",
             ),

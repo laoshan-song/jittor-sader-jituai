@@ -1,28 +1,61 @@
-# 赛道一热身赛 - 示例代码
+# Warm-up 1: Cora GCN
 
-本赛题提供示例代码框架，提供数据加载、模型定义、训练步骤等功能。
+This warm-up trains a two-layer GCN on the Cora citation graph with Jittor and
+JittorGeometric, then writes test-node predictions to `result.json`.
 
-选手可以基于示例代码填充注释为 TODO 的部分完成该赛题：
+## Data
 
+Place the competition release dataset here:
 
-## 使用说明
+```text
+warmups/cora_gcn/data/cora.pkl
+```
 
-1. 配置环境：参考 [JittorGeometric 官方安装指南](https://github.com/AlgRUC/JittorGeometric?tab=readme-ov-file#installation)，安装 Jittor、JittorGeometric 和依赖。
-2. 数据集文件 `cora.pkl` 应放置于 `data/` 目录下
-3. 完成 `gcn.py` 中的 TODO
-4. 运行 `python gcn.py` 进行训练和预测
+The dataset file is not tracked in Git. It contains:
 
-## 数据集说明
+| Field | Type | Description |
+| --- | --- | --- |
+| `x` | numpy array `(2708, 1433)` | node feature matrix |
+| `y` | numpy array `(2708,)` | node labels, with test labels set to `-1` |
+| `edge_index` | numpy array `(2, num_edges)` | graph edges |
+| `train_mask` | numpy bool array `(2708,)` | training node mask |
+| `val_mask` | numpy bool array `(2708,)` | validation node mask |
+| `test_mask` | numpy bool array `(2708,)` | test node mask |
+| `num_classes` | int | number of classes |
+| `num_features` | int | feature dimension |
 
-数据集文件 `data/cora.pkl` 为 pickle 格式，包含以下字段：
+## Run
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `x` | numpy array (2708, 1433) | 节点特征矩阵 |
-| `y` | numpy array (2708,) | 节点标签（测试集标签为 -1） |
-| `edge_index` | numpy array (2, num_edges) | 边列表 |
-| `train_mask` | numpy bool array (2708,) | 训练集掩码 |
-| `val_mask` | numpy bool array (2708,) | 验证集掩码 |
-| `test_mask` | numpy bool array (2708,) | 测试集掩码 |
-| `num_classes` | int | 类别数（7） |
-| `num_features` | int | 特征维度（1433） |
+From the repository root:
+
+```bash
+source env.sh
+python warmups/cora_gcn/gcn.py \
+  --data-path warmups/cora_gcn/data/cora.pkl \
+  --output warmups/cora_gcn/result.json \
+  --seed 42 \
+  --epochs 200
+```
+
+Useful options:
+
+- `--cpu`: force CPU execution
+- `--hidden-dim`: hidden feature size, default `256`
+- `--dropout`: dropout rate, default `0.8`
+- `--lr`: learning rate, default `0.01`
+- `--weight-decay`: Adam weight decay, default `5e-4`
+
+## Output
+
+The script writes:
+
+```text
+warmups/cora_gcn/result.json
+```
+
+Package it for the platform with:
+
+```bash
+cd warmups/cora_gcn
+zip ../../submissions/warmup1-result.zip result.json
+```
