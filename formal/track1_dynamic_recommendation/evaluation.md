@@ -110,6 +110,23 @@ candidate distribution closely enough. It can rank an experiment higher locally
 while the leaderboard falls sharply, so any candidate that fails the
 pre-submit gate is rejected even if offline MRR improves.
 
+For scorer changes, run matched scorer comparison before generating a submit
+zip:
+
+```bash
+python formal/track1_dynamic_recommendation/compare_scorers_eval.py \
+  --data-zip ../data_A.zip \
+  --scenes dataset1,dataset2 \
+  --splits temporal,official \
+  --candidate-strategies hard,test_pool \
+  --sample-positives 5000
+```
+
+Approval requires no material MRR loss on `test_pool` for either scene. The
+`test_pool` strategy is treated as more important than `hard` because the
+failed `0.9764773175367665` submission improved `dataset2 official/hard` but
+lost on test-pool-like candidates.
+
 ## GPU Policy for Autoresearch
 
 Use one GPU per training process:
