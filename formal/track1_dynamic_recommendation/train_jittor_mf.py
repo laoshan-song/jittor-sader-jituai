@@ -57,8 +57,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=65536)
     parser.add_argument("--lr", type=float, default=0.03)
     parser.add_argument("--reg", type=float, default=1e-6)
+    parser.add_argument("--max-grad-norm", type=float, default=5.0)
+    parser.add_argument("--embedding-clip", type=float, default=8.0)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--mf-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--mf-gate",
+        choices=("none", "seen-dst", "repeat-pair"),
+        default="none",
+        help="Limit MF blending to candidates with reliable historical evidence.",
+    )
     parser.add_argument("--negatives-per-positive", type=int, default=2)
     parser.add_argument("--hard-negative-ratio", type=float, default=0.0)
     parser.add_argument("--temperature", type=float, default=2.0)
@@ -182,13 +190,41 @@ def mf_scores(
     return scores
 
 
-def blend_scores(heuristic_scores: list[float], mf_score_values: np.ndarray, mf_weight: float) -> list[float]:
-    mf_std = float(mf_score_values.std())
-    if mf_std > 1e-6:
-        mf_score_values = (mf_score_values - float(mf_score_values.mean())) / mf_std
+def blend_scores(
+    heuristic_scores: list[float],
+    mf_score_values: np.ndarray,
+    mf_weight: float,
+    eligible_mask: list[bool] | None = None,
+) -> list[float]:
+    mf_score_values = np.asarray(mf_score_values, dtype=np.float64)
+    finite_mask = np.isfinite(mf_score_values)
+    if not finite_mask.all():
+        mf_score_values = np.where(finite_mask, mf_score_values, 0.0)
+    mf_score_values = np.clip(mf_score_values, -1e6, 1e6)
+
+    if eligible_mask is not None:
+        eligible = np.asarray(eligible_mask, dtype=bool)
+        active_values = mf_score_values[eligible]
     else:
-        mf_score_values = mf_score_values * 0.0
-    return [h + mf_weight * float(m) for h, m in zip(heuristic_scores, mf_score_values)]
+        eligible = np.ones_like(mf_score_values, dtype=bool)
+        active_values = mf_score_values
+
+    normalized = np.zeros_like(mf_score_values, dtype=np.float64)
+    mf_std = float(active_values.std(dtype=np.float64)) if len(active_values) else 0.0
+    if math.isfinite(mf_std) and mf_std > 1e-6:
+        normalized[eligible] = (active_values - float(active_values.mean(dtype=np.float64))) / mf_std
+    return [h + mf_weight * float(m) for h, m in zip(heuristic_scores, normalized)]
+
+
+def mf_eligible_mask(src: int, candidates: list[int], heuristic: HistoryBaseline, mode: str) -> list[bool] | None:
+    if mode == "none":
+        return None
+    if mode == "seen-dst":
+        return [dst in heuristic.dst_count for dst in candidates]
+    if mode == "repeat-pair":
+        src_counts = heuristic.src_dst_count.get(src, {})
+        return [dst in src_counts for dst in candidates]
+    raise ValueError(f"Unknown mf gate: {mode}")
 
 
 def output_probabilities(scores: list[float], args: argparse.Namespace) -> list[float]:
@@ -239,7 +275,7 @@ def train_jittor_mf(
             flat_neg_items = neg_items.reshape((-1,))
             neg_scores = model.score(flat_users, flat_neg_items).reshape(neg_items.shape)
             margin = pos_scores.reshape((-1, 1)) - neg_scores
-            loss = jt.log(1.0 + jt.exp(-margin)).mean()
+            loss = nn.softplus(-margin).mean()
             neg_emb = model.item_emb(flat_neg_items)
             reg = (
                 (model.user_emb(users) * model.user_emb(users)).sum(dim=1)
@@ -250,7 +286,17 @@ def train_jittor_mf(
                 .mean(dim=1)
             ).mean()
             loss = loss + args.reg * reg
-            optimizer.step(loss)
+            if args.max_grad_norm > 0:
+                optimizer.zero_grad()
+                optimizer.backward(loss)
+                optimizer.clip_grad_norm(args.max_grad_norm)
+                optimizer.step()
+            else:
+                optimizer.step(loss)
+            if args.embedding_clip > 0:
+                model.user_emb.weight.assign(jt.clamp(model.user_emb.weight, -args.embedding_clip, args.embedding_clip))
+                model.item_emb.weight.assign(jt.clamp(model.item_emb.weight, -args.embedding_clip, args.embedding_clip))
+                model.item_bias.weight.assign(jt.clamp(model.item_bias.weight, -args.embedding_clip, args.embedding_clip))
             total_loss += float(loss.item())
 
         print(f"epoch={epoch} loss={total_loss / steps_per_epoch:.6f}", flush=True)
@@ -259,11 +305,17 @@ def train_jittor_mf(
 
 
 def export_jittor_embeddings(model: JittorMF) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    return (
-        np.array(model.user_emb.weight.numpy()),
-        np.array(model.item_emb.weight.numpy()),
-        np.array(model.item_bias.weight.numpy()).reshape(-1),
-    )
+    user_emb = clean_embedding_array(np.array(model.user_emb.weight.numpy()), "user_emb")
+    item_emb = clean_embedding_array(np.array(model.item_emb.weight.numpy()), "item_emb")
+    item_bias = clean_embedding_array(np.array(model.item_bias.weight.numpy()).reshape(-1), "item_bias")
+    return user_emb, item_emb, item_bias
+
+
+def clean_embedding_array(values: np.ndarray, name: str) -> np.ndarray:
+    nonfinite_count = int((~np.isfinite(values)).sum())
+    if nonfinite_count:
+        print(f"[warn] {name} nonfinite_count={nonfinite_count}; replacing with 0", flush=True)
+    return np.nan_to_num(values.astype(np.float32, copy=False), nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def open_csv(data_zip: zipfile.ZipFile, member: str) -> io.TextIOWrapper:
@@ -294,7 +346,8 @@ def write_scene(
                     candidates = [int(value) for value in row[2:]]
                     heuristic_scores = [heuristic.score(src, dst, time_value) for dst in candidates]
                     model_scores = mf_scores(src, candidates, user_to_idx, item_to_idx, user_emb, item_emb, item_bias)
-                    scores = blend_scores(heuristic_scores, model_scores, args.mf_weight)
+                    eligible_mask = mf_eligible_mask(src, candidates, heuristic, args.mf_gate)
+                    scores = blend_scores(heuristic_scores, model_scores, args.mf_weight, eligible_mask)
                     probs = output_probabilities(scores, args)
                     writer.writerow([f"{value:.8f}" for value in probs])
                     rows += 1

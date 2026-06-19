@@ -55,6 +55,7 @@ python formal/track1_dynamic_recommendation/train_jittor_mf.py \
   --output outputs/track1/result.zip \
   --epochs 6 \
   --mf-weight 1 \
+  --mf-gate repeat-pair \
   --probability-mode rank
 ```
 
@@ -90,6 +91,28 @@ python formal/track1_dynamic_recommendation/train_jittor_mf.py \
 
 服务器无外网时，Jittor 首次 CUDA 编译可能需要离线补齐 cutt 缓存。推荐将
 `JITTOR_HOME`、`XDG_CACHE_HOME`、模型和输出都放在数据盘目录，避免写入 home。
+当前复现服务器使用如下环境变量绕过无外网 cutt 和缺失 cuDNN 头文件的问题：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+HOME=/data1/ml-1-1 \
+XDG_CACHE_HOME=/data1/ml-1-1/cache \
+JITTOR_HOME=/data1/ml-1-1/jittor_home \
+use_cutt=0 \
+conv_opt=1 \
+/data1/ml-1-1/venv/bin/python formal/track1_dynamic_recommendation/train_jittor_mf.py \
+  --data-zip data_A.zip \
+  --output outputs/result_jittor_mf_repeat_pair.zip \
+  --scenes dataset1,dataset2 \
+  --epochs 6 \
+  --dim 96 \
+  --batch-size 65536 \
+  --lr 0.03 \
+  --seed 2026 \
+  --mf-weight 1 \
+  --mf-gate repeat-pair \
+  --probability-mode rank
+```
 
 ## Local Evaluation
 
