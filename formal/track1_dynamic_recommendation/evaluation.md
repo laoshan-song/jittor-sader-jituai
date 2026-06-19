@@ -8,6 +8,10 @@ The evaluation system has three layers:
 
 The online leaderboard is the only trusted score. Local metrics are used to
 filter bad candidates and decide which experiments are worth a daily submission.
+After the failed `result_calibrated_d2_medium.zip` submission scored
+`0.9764773175367665`, local train-split MRR is no longer allowed to approve a
+submission by itself. It may only be used for diagnosis. The pre-submit gate is
+the online-calibrated ranking drift check against the best known online anchor.
 
 ## Submission Audit
 
@@ -33,6 +37,31 @@ Important fields:
 - `avg_normalized_entropy`: very low entropy is a warning sign.
 - `top10_jaccard`: useful as a drift guardrail, not as the main optimization
   target.
+
+## Pre-Submit Gate
+
+Use the current best online-verified package as the anchor:
+
+```bash
+python formal/track1_dynamic_recommendation/submission_gate.py \
+  --anchor outputs/track1/result.zip \
+  --candidate /path/to/candidate.zip
+```
+
+Default hard gates:
+
+- `dataset1 top1 >= 0.99`
+- `dataset1 top10_jaccard >= 0.95`
+- `dataset2 top1 >= 0.90`
+- `dataset2 top10_jaccard >= 0.75`
+
+These thresholds are calibrated from known online outcomes:
+
+- `result_mf_conservative_rank_w1.zip`: online `1.1099002959299407`,
+  `dataset2 top1=0.9691`, `dataset2 top10_jaccard=0.8211` versus the current
+  anchor.
+- `result_calibrated_d2_medium.zip`: online `0.9764773175367665`,
+  `dataset2 top1=0.5313`, `dataset2 top10_jaccard=0.3344`; it must be blocked.
 
 ## Online Calibration
 
@@ -75,6 +104,11 @@ python formal/track1_dynamic_recommendation/offline_eval.py \
 
 Use this to understand model behavior on labeled train-only splits. Do not pick
 submissions from offline MRR alone.
+
+The `official` split in `dataset2/train.csv` does not match the hidden test
+candidate distribution closely enough. It can rank an experiment higher locally
+while the leaderboard falls sharply, so any candidate that fails the
+pre-submit gate is rejected even if offline MRR improves.
 
 ## GPU Policy for Autoresearch
 
