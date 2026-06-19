@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from baseline import HistoryBaseline
+from temporal_motif_rerank import TemporalMotifReranker
 from validate_heuristic import add_unique_top, load_test_candidate_pools
 
 
@@ -74,6 +75,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--valid-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output-json", type=Path)
+    parser.add_argument("--scorer", choices=("history", "motif"), default="history")
+    parser.add_argument("--reverse-weight", type=float, default=0.0)
+    parser.add_argument("--reverse-recency-weight", type=float, default=0.0)
+    parser.add_argument("--co-motif-weight", type=float, default=0.0)
+    parser.add_argument("--co-motif-recent-weight", type=float, default=0.0)
+    parser.add_argument("--source-pop-weight", type=float, default=0.0)
+    parser.add_argument("--local-repeat-boost", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -112,8 +120,18 @@ def split_rows(
     raise ValueError(f"Unknown split: {split_name}")
 
 
-def build_model(rows: list[tuple[int, int, int]]) -> HistoryBaseline:
-    model = HistoryBaseline(**DEFAULT_WEIGHTS)
+def build_model(rows: list[tuple[int, int, int]], args: argparse.Namespace) -> HistoryBaseline | TemporalMotifReranker:
+    if args.scorer == "motif":
+        model = TemporalMotifReranker(
+            reverse_weight=args.reverse_weight,
+            reverse_recency_weight=args.reverse_recency_weight,
+            co_motif_weight=args.co_motif_weight,
+            co_motif_recent_weight=args.co_motif_recent_weight,
+            source_pop_weight=args.source_pop_weight,
+            local_repeat_boost=args.local_repeat_boost,
+        )
+    else:
+        model = HistoryBaseline(**DEFAULT_WEIGHTS)
     for src, dst, time_value in rows:
         model.update(src, dst, time_value)
     model.finalize()
@@ -189,19 +207,17 @@ def build_context(
     data_zip: zipfile.ZipFile,
     scene: str,
     split_name: str,
-    sample_positives: int,
-    valid_fraction: float,
-    seed: int,
+    args: argparse.Namespace,
 ) -> EvalContext | None:
-    rng = random.Random(seed)
+    rng = random.Random(args.seed)
     rows = read_rows(data_zip, scene)
-    train_rows, valid_rows = split_rows(rows, split_name, valid_fraction)
+    train_rows, valid_rows = split_rows(rows, split_name, args.valid_fraction)
     if not train_rows or not valid_rows:
         return None
-    if sample_positives and sample_positives < len(valid_rows):
-        valid_rows = rng.sample(valid_rows, sample_positives)
+    if args.sample_positives and args.sample_positives < len(valid_rows):
+        valid_rows = rng.sample(valid_rows, args.sample_positives)
 
-    model = build_model(train_rows)
+    model = build_model(train_rows, args)
     all_dsts = sorted({dst for _, dst, _ in train_rows})
     popular_dsts = [dst for dst, _ in Counter(dst for _, dst, _ in train_rows).most_common(10000)]
     src_test_candidates, all_test_candidates = load_test_candidate_pools(data_zip, scene)
@@ -303,9 +319,7 @@ def main() -> None:
                     data_zip,
                     scene,
                     split_name,
-                    args.sample_positives,
-                    args.valid_fraction,
-                    args.seed,
+                    args,
                 )
                 if context is None:
                     continue
