@@ -22,6 +22,7 @@ SCENES = ("dataset1", "dataset2")
 class SceneAgreement:
     top1: float
     top10_jaccard: float
+    top10_exact: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-d1-top10", type=float, default=0.95)
     parser.add_argument("--min-d2-top1", type=float, default=0.90)
     parser.add_argument("--min-d2-top10", type=float, default=0.75)
+    parser.add_argument("--min-d2-top10-exact", type=float, default=0.95)
     return parser.parse_args()
 
 
@@ -53,19 +55,24 @@ def agreement(anchor: Path, candidate: Path, scene: str) -> SceneAgreement:
     if not pairs or len(anchor_orders) != len(candidate_orders):
         return SceneAgreement(0.0, 0.0)
     top1 = sum(a[0] == c[0] for a, c in pairs) / len(pairs)
+    top10_exact = sum(a == c for a, c in pairs) / len(pairs)
     jaccard = 0.0
     for anchor_order, candidate_order in pairs:
         a = set(anchor_order)
         c = set(candidate_order)
         jaccard += len(a & c) / len(a | c)
-    return SceneAgreement(top1=top1, top10_jaccard=jaccard / len(pairs))
+    return SceneAgreement(top1=top1, top10_jaccard=jaccard / len(pairs), top10_exact=top10_exact)
 
 
 def main() -> None:
     args = parse_args()
     results = {scene: agreement(args.anchor, args.candidate, scene) for scene in SCENES}
     for scene, stats in results.items():
-        print(f"{scene}: top1={stats.top1:.4f} top10_jaccard={stats.top10_jaccard:.4f}")
+        print(
+            f"{scene}: top1={stats.top1:.4f} "
+            f"top10_jaccard={stats.top10_jaccard:.4f} "
+            f"top10_exact={stats.top10_exact:.4f}"
+        )
 
     failures: list[str] = []
     if results["dataset1"].top1 < args.min_d1_top1:
@@ -76,6 +83,8 @@ def main() -> None:
         failures.append("dataset2 top1 drift")
     if results["dataset2"].top10_jaccard < args.min_d2_top10:
         failures.append("dataset2 top10 drift")
+    if results["dataset2"].top10_exact < args.min_d2_top10_exact:
+        failures.append("dataset2 top10 order drift")
 
     if failures:
         print("BLOCK: " + ", ".join(failures))
