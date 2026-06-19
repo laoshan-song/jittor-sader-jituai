@@ -74,6 +74,12 @@ matrix-factorization reranker，并融合历史/序列统计特征生成提交�
 `baseline.py` 是无需训练的规则 baseline，`train_mf_rerank.py` 仅作为
 早期 PyTorch 探索脚本保留，不作为代码审核复现主路径。
 
+`train_lightgbm_ranker.py` 是打榜探索工具，用 LambdaMART 检查表格排序特征
+是否有增益；`gated_secondary_promote.py` 只把探索模型的高置信 top1 信号小比例
+注入线上验证过的稳定提交。由于赛事要求审核复现基于计图，LightGBM 结果不能
+单独作为最终审核方案；若该路线在线上有效，需要将门控策略和排序器蒸馏/改写
+到 Jittor 复现入口中。
+
 快速自检命令：
 
 ```bash

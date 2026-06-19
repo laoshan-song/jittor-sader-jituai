@@ -127,6 +127,47 @@ Approval requires no material MRR loss on `test_pool` for either scene. The
 failed `0.9764773175367665` submission improved `dataset2 official/hard` but
 lost on test-pool-like candidates.
 
+## Strong Secondary Models
+
+LightGBM LambdaMART is useful for finding stronger tabular ranking signal:
+
+```bash
+python formal/track1_dynamic_recommendation/train_lightgbm_ranker.py \
+  --data-zip data_A.zip \
+  --primary-zip outputs/track1/result.zip \
+  --scene dataset2 \
+  --strategy test_pool \
+  --train-queries 12000 \
+  --valid-queries 4000 \
+  --score-mode ranker \
+  --output /tmp/result_lgbm_ranker_d2.zip
+```
+
+Direct full-rerank submissions are rejected even when local MRR is high. The
+known LightGBM ranker candidate changed `dataset2` top1 agreement to `0.2669`
+and top10 exact order to `0.0000` versus the online anchor, so it is too far
+from the calibrated safe region.
+
+Use high-confidence gated promotion instead:
+
+```bash
+python formal/track1_dynamic_recommendation/gated_secondary_promote.py \
+  --anchor outputs/track1/result.zip \
+  --secondary /tmp/result_lgbm_ranker_d2.zip \
+  --output /tmp/result_lgbm_promote_5pct.zip \
+  --max-anchor-rank 3 \
+  --min-secondary-rank-of-anchor-top1 20 \
+  --max-promote-frac 0.05
+
+python formal/track1_dynamic_recommendation/submission_gate.py \
+  --anchor outputs/track1/result.zip \
+  --candidate /tmp/result_lgbm_promote_5pct.zip
+```
+
+The 5% gated candidate changes only 7,671 of 153,420 `dataset2` rows and keeps
+the top10 candidate set unchanged. It passes the current drift gate at
+`dataset2 top1=0.9500`, `top10_jaccard=1.0000`, `top10_exact=0.9500`.
+
 ## GPU Policy for Autoresearch
 
 Use one GPU per training process:
