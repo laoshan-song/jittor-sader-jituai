@@ -57,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=65536)
     parser.add_argument("--lr", type=float, default=0.03)
     parser.add_argument("--reg", type=float, default=1e-6)
+    parser.add_argument("--optimizer", choices=("adam", "sgd"), default="adam")
+    parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--max-grad-norm", type=float, default=5.0)
     parser.add_argument("--embedding-clip", type=float, default=8.0)
     parser.add_argument("--seed", type=int, default=2026)
@@ -241,7 +243,10 @@ def train_jittor_mf(
 ) -> JittorMF:
     rng = np.random.default_rng(args.seed)
     model = JittorMF(len(user_to_idx), len(item_to_idx), args.dim)
-    optimizer = nn.Adam(model.parameters(), lr=args.lr)
+    if args.optimizer == "sgd":
+        optimizer = nn.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    else:
+        optimizer = nn.Adam(model.parameters(), lr=args.lr)
 
     src_idx = np.array([user_to_idx[src] for src, _, _ in rows], dtype=np.int32)
     dst_idx = np.array([item_to_idx[dst] for _, dst, _ in rows], dtype=np.int32)
@@ -297,6 +302,7 @@ def train_jittor_mf(
                 model.user_emb.weight.assign(jt.clamp(model.user_emb.weight, -args.embedding_clip, args.embedding_clip))
                 model.item_emb.weight.assign(jt.clamp(model.item_emb.weight, -args.embedding_clip, args.embedding_clip))
                 model.item_bias.weight.assign(jt.clamp(model.item_bias.weight, -args.embedding_clip, args.embedding_clip))
+                jt.sync([model.user_emb.weight, model.item_emb.weight, model.item_bias.weight])
             total_loss += float(loss.item())
 
         print(f"epoch={epoch} loss={total_loss / steps_per_epoch:.6f}", flush=True)
