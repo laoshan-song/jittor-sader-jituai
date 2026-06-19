@@ -93,6 +93,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--valid-fraction", type=float, default=0.15)
     parser.add_argument("--blend-weight", type=float, default=0.35)
     parser.add_argument("--score-mode", choices=("ranker", "blend"), default="ranker")
+    parser.add_argument("--objective", choices=("lambdarank", "rank_xendcg"), default="lambdarank")
     parser.add_argument("--num-leaves", type=int, default=63)
     parser.add_argument("--learning-rate", type=float, default=0.035)
     parser.add_argument("--n-estimators", type=int, default=450)
@@ -469,7 +470,7 @@ def main() -> None:
         )
 
         ranker = LGBMRanker(
-            objective="lambdarank",
+            objective=args.objective,
             metric="ndcg",
             n_estimators=args.n_estimators,
             learning_rate=args.learning_rate,
