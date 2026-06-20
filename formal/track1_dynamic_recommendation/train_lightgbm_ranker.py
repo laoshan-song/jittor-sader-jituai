@@ -162,13 +162,32 @@ def make_candidates(
     seen = {positive_dst}
 
     def add_random(pool: list[int], size: int) -> None:
-        available = [dst for dst in pool if dst not in seen]
         need = size - len(candidates)
-        if need <= 0 or not available:
+        if need <= 0 or not pool:
             return
-        chosen = available if len(available) <= need else rng.sample(available, need)
-        seen.update(chosen)
-        candidates.extend(chosen)
+        if len(pool) <= need + len(seen):
+            for dst in pool:
+                if len(candidates) >= size:
+                    return
+                if dst not in seen:
+                    seen.add(dst)
+                    candidates.append(dst)
+            return
+        attempts = 0
+        max_attempts = max(1000, need * 100)
+        while len(candidates) < size and attempts < max_attempts:
+            attempts += 1
+            dst = rng.choice(pool)
+            if dst not in seen:
+                seen.add(dst)
+                candidates.append(dst)
+        if len(candidates) < size:
+            for dst in pool:
+                if len(candidates) >= size:
+                    return
+                if dst not in seen:
+                    seen.add(dst)
+                    candidates.append(dst)
 
     if strategy == "hard":
         add_random(src_test_candidates.get(src, []), min(target_size, 1 + target_size * 2 // 3))
