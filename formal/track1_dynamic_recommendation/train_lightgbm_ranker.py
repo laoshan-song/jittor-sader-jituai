@@ -16,7 +16,7 @@ import math
 import random
 import warnings
 import zipfile
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -63,7 +63,222 @@ FEATURE_NAMES = [
     "dst_pop_rank_recip",
     "dst_is_seen",
     "query_time_norm",
+    "reverse_pair_log_norm",
+    "reverse_pair_recency",
+    "dst_as_src_log_norm",
+    "two_hop_log_norm",
+    "two_hop_recency",
+    "aa_score",
+    "ra_score",
+    "src_out_dst_out_jaccard",
+    "src_out_dst_in_jaccard",
+    "src_recent_dst_in_16",
+    "src_recent_dst_in_64",
+    "src_recent_dst_in_256",
+    "src_recent_dst_out_16",
+    "sequence_overlap_16",
+    "sequence_overlap_64",
+    "sequence_overlap_256",
+    "position_decay_overlap",
+    "co_motif_log_norm",
+    "co_motif_recent",
+    "node_memory_gap",
+    "dst_memory_gap",
+    "dst_test_freq_log_norm",
+    "src_candidate_freq_log_norm",
 ]
+
+
+class StructuralContext:
+    """Cached temporal-graph features inspired by TGN/TGAT/CAW/DyGFormer."""
+
+    def __init__(self, rows: list[tuple[int, int, int]], src_test_candidates: dict[int, list[int]], all_test_candidates: list[int]) -> None:
+        self.out_neighbors: dict[int, set[int]] = defaultdict(set)
+        self.in_neighbors: dict[int, set[int]] = defaultdict(set)
+        self.out_top_neighbors: dict[int, set[int]] = {}
+        self.in_top_neighbors: dict[int, set[int]] = {}
+        self.last_out_time: dict[int, dict[int, int]] = defaultdict(dict)
+        self.last_in_time: dict[int, dict[int, int]] = defaultdict(dict)
+        self.node_last_time: dict[int, int] = {}
+        self.node_count: Counter[int] = Counter()
+        self.sequence_by_src: dict[int, list[int]] = defaultdict(list)
+        self.sequence_sets: dict[tuple[int, int], set[int]] = {}
+        self.co_motif: dict[int, Counter[int]] = defaultdict(Counter)
+        self.test_dst_freq: Counter[int] = Counter(all_test_candidates)
+        self.src_candidate_freq: dict[int, Counter[int]] = {
+            src: Counter(candidates) for src, candidates in src_test_candidates.items()
+        }
+
+        for src, dst, time_value in sorted(rows, key=lambda value: value[2]):
+            self.out_neighbors[src].add(dst)
+            self.in_neighbors[dst].add(src)
+            self.last_out_time[src][dst] = max(time_value, self.last_out_time[src].get(dst, time_value))
+            self.last_in_time[dst][src] = max(time_value, self.last_in_time[dst].get(src, time_value))
+            self.node_last_time[src] = max(time_value, self.node_last_time.get(src, time_value))
+            self.node_last_time[dst] = max(time_value, self.node_last_time.get(dst, time_value))
+            self.node_count[src] += 1
+            self.node_count[dst] += 1
+            self.sequence_by_src[src].append(dst)
+
+        max_co = 1
+        for sequence in self.sequence_by_src.values():
+            for index, dst in enumerate(sequence):
+                for prev in sequence[max(0, index - 16):index]:
+                    if prev == dst:
+                        continue
+                    self.co_motif[prev][dst] += 1
+                    max_co = max(max_co, self.co_motif[prev][dst])
+
+        self.max_node_log = max((math.log1p(value) for value in self.node_count.values()), default=1.0)
+        self.max_test_freq_log = max((math.log1p(value) for value in self.test_dst_freq.values()), default=1.0)
+        self.max_src_candidate_freq_log = max(
+            (math.log1p(value) for counts in self.src_candidate_freq.values() for value in counts.values()),
+            default=1.0,
+        )
+        self.max_co_log = math.log1p(max_co)
+        self._finalize_limited_views()
+
+    def _finalize_limited_views(self) -> None:
+        for node, times in self.last_out_time.items():
+            self.out_top_neighbors[node] = {
+                dst for dst, _ in sorted(times.items(), key=lambda item: item[1], reverse=True)[:256]
+            }
+        for node, times in self.last_in_time.items():
+            self.in_top_neighbors[node] = {
+                src for src, _ in sorted(times.items(), key=lambda item: item[1], reverse=True)[:256]
+            }
+        for src, sequence in self.sequence_by_src.items():
+            for window in (16, 64, 256):
+                self.sequence_sets[(src, window)] = set(sequence[-window:])
+
+    @staticmethod
+    def _jaccard(left: set[int], right: set[int]) -> float:
+        if not left or not right:
+            return 0.0
+        return len(left & right) / len(left | right)
+
+    @staticmethod
+    def _recency(now: int, then: int | None) -> float:
+        if then is None:
+            return 0.0
+        return 1.0 / (1.0 + max(0, now - then))
+
+    def two_hop(self, src: int, dst: int, query_time: int) -> tuple[float, float, float, float]:
+        intermediates = self.out_top_neighbors.get(src, set()) & self.in_top_neighbors.get(dst, set())
+        if not intermediates:
+            return 0.0, 0.0, 0.0, 0.0
+        recency = 0.0
+        aa = 0.0
+        ra = 0.0
+        for mid in intermediates:
+            t1 = self.last_out_time.get(src, {}).get(mid)
+            t2 = self.last_out_time.get(mid, {}).get(dst)
+            if t1 is not None and t2 is not None:
+                recency += self._recency(query_time, max(t1, t2))
+            degree = len(self.out_neighbors.get(mid, ())) + len(self.in_neighbors.get(mid, ()))
+            if degree > 1:
+                aa += 1.0 / math.log1p(degree)
+                ra += 1.0 / degree
+        scale = max(1, len(intermediates))
+        return math.log1p(len(intermediates)), recency / scale, aa, ra
+
+    def sequence_overlap(self, src: int, dst: int, window: int) -> float:
+        recent = self.sequence_by_src.get(src, [])[-window:]
+        dst_out = self.out_top_neighbors.get(dst, set())
+        if not recent or not dst_out:
+            return 0.0
+        return sum(1 for value in recent if value in dst_out) / len(recent)
+
+    def structural_features(self, src: int, dst: int, query_time: int, feature_set: str = "cheap") -> list[float]:
+        reverse_count = 1.0 if src in self.out_neighbors.get(dst, set()) else 0.0
+        reverse_last = self.last_out_time.get(dst, {}).get(src)
+        src_out = self.out_top_neighbors.get(src, set())
+        dst_out = self.out_top_neighbors.get(dst, set())
+        dst_in = self.in_top_neighbors.get(dst, set())
+        recent = self.sequence_by_src.get(src, [])
+        recent_16 = recent[-16:]
+        recent_64 = recent[-64:]
+        recent_256 = recent[-256:]
+        recent_set_16 = self.sequence_sets.get((src, 16), set())
+        recent_set_64 = self.sequence_sets.get((src, 64), set())
+        recent_set_256 = self.sequence_sets.get((src, 256), set())
+        # Exact two-hop intersections are costly on dataset2's high-degree nodes;
+        # cheap overlap features below carry the same structural intent.
+        two_hop_log, two_hop_recency, aa, ra = 0.0, 0.0, 0.0, 0.0
+
+        def recent_hit(values: list[int], target: set[int]) -> float:
+            if not values or not target:
+                return 0.0
+            return sum(1 for value in values if value in target) / len(values)
+
+        position_decay = 0.0
+        co_motif = 0.0
+        co_recent = 0.0
+        for offset, prev in enumerate(reversed(recent_64), start=1):
+            if prev in dst_out:
+                position_decay += 1.0 / math.sqrt(offset)
+            count = self.co_motif.get(prev, {}).get(dst, 0)
+            if count:
+                value = math.log1p(count) / self.max_co_log
+                co_motif += value / math.sqrt(offset)
+                co_recent += value / offset
+
+        node_gap = self._recency(query_time, self.node_last_time.get(src))
+        dst_gap = self._recency(query_time, self.node_last_time.get(dst))
+        src_candidate_count = self.src_candidate_freq.get(src, Counter()).get(dst, 0)
+        cheap_tail = [
+            co_motif,
+            co_recent,
+            node_gap,
+            dst_gap,
+            math.log1p(self.test_dst_freq.get(dst, 0)) / self.max_test_freq_log if self.test_dst_freq.get(dst, 0) else 0.0,
+            math.log1p(src_candidate_count) / self.max_src_candidate_freq_log if src_candidate_count else 0.0,
+        ]
+        if feature_set == "cheap":
+            return [
+                math.log1p(reverse_count) / self.max_node_log if reverse_count else 0.0,
+                self._recency(query_time, reverse_last),
+                math.log1p(self.node_count.get(dst, 0)) / self.max_node_log if self.node_count.get(dst, 0) else 0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                len(recent_set_16 & dst_in) / max(1, len(recent_set_16)),
+                len(recent_set_64 & dst_in) / max(1, len(recent_set_64)),
+                len(recent_set_256 & dst_in) / max(1, len(recent_set_256)),
+                len(recent_set_16 & dst_out) / max(1, len(recent_set_16)),
+                0.0,
+                0.0,
+                0.0,
+                position_decay,
+                *cheap_tail,
+            ]
+        return [
+            math.log1p(reverse_count) / self.max_node_log if reverse_count else 0.0,
+            self._recency(query_time, reverse_last),
+            math.log1p(self.node_count.get(dst, 0)) / self.max_node_log if self.node_count.get(dst, 0) else 0.0,
+            two_hop_log,
+            two_hop_recency,
+            aa,
+            ra,
+            self._jaccard(src_out, dst_out),
+            self._jaccard(src_out, dst_in),
+            recent_hit(recent_16, dst_in),
+            recent_hit(recent_64, dst_in),
+            recent_hit(recent_256, dst_in),
+            recent_hit(recent_16, dst_out),
+            len(recent_set_16 & dst_out) / max(1, len(recent_set_16)),
+            len(recent_set_64 & dst_out) / max(1, len(recent_set_64)),
+            len(recent_set_256 & dst_out) / max(1, len(recent_set_256)),
+            position_decay,
+            co_motif,
+            co_recent,
+            node_gap,
+            dst_gap,
+            *cheap_tail[-2:],
+        ]
 
 
 @dataclass
@@ -86,13 +301,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--primary-zip", type=Path, default=Path("outputs/track1/result.zip"))
     parser.add_argument("--output", type=Path, default=Path("/tmp/result_lgbm_ranker.zip"))
     parser.add_argument("--scene", default="dataset2")
-    parser.add_argument("--strategy", choices=("hard", "test_pool", "mixed"), default="test_pool")
+    parser.add_argument("--strategy", choices=("hard", "test_pool", "mixed", "temporal_struct_hard"), default="test_pool")
     parser.add_argument("--train-queries", type=int, default=30000)
     parser.add_argument("--valid-queries", type=int, default=8000)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--valid-fraction", type=float, default=0.15)
     parser.add_argument("--blend-weight", type=float, default=0.35)
     parser.add_argument("--score-mode", choices=("ranker", "blend"), default="ranker")
+    parser.add_argument("--feature-set", choices=("base", "cheap", "structural"), default="base")
     parser.add_argument("--objective", choices=("lambdarank", "rank_xendcg"), default="lambdarank")
     parser.add_argument("--num-leaves", type=int, default=63)
     parser.add_argument("--learning-rate", type=float, default=0.035)
@@ -197,6 +413,10 @@ def make_candidates(
         add_random(all_test_candidates, min(target_size, 1 + target_size * 4 // 5))
     elif strategy == "mixed":
         add_unique_top(candidates, seen, popular_dsts, min(target_size, 1 + target_size // 3))
+    elif strategy == "temporal_struct_hard":
+        add_random(src_test_candidates.get(src, []), min(target_size, 1 + target_size // 2))
+        add_random(all_test_candidates, min(target_size, 1 + target_size * 3 // 4))
+        add_unique_top(candidates, seen, popular_dsts, min(target_size, 1 + target_size * 9 // 10))
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
     add_random(all_dsts, target_size)
@@ -250,8 +470,21 @@ def raw_features(model: HistoryBaseline, src: int, dst: int, time_value: int) ->
     ]
 
 
-def query_features(model: HistoryBaseline, src: int, candidates: list[int], time_value: int) -> np.ndarray:
+def query_features(
+    model: HistoryBaseline,
+    src: int,
+    candidates: list[int],
+    time_value: int,
+    structural_context: StructuralContext | None = None,
+    feature_set: str = "cheap",
+) -> np.ndarray:
     raw = np.asarray([raw_features(model, src, dst, time_value) for dst in candidates], dtype=np.float32)
+    if structural_context is not None:
+        structural = np.asarray(
+            [structural_context.structural_features(src, dst, time_value, feature_set) for dst in candidates],
+            dtype=np.float32,
+        )
+        raw = np.concatenate([raw, structural], axis=1)
     base = raw[:, 0]
     order = np.argsort(-base)
     ranks = np.empty_like(order)
@@ -276,6 +509,7 @@ def query_features(model: HistoryBaseline, src: int, candidates: list[int], time
 
 def build_rank_data(
     model: HistoryBaseline,
+    structural_context: StructuralContext | None,
     positives: list[tuple[int, int, int]],
     all_dsts: list[int],
     popular_dsts: list[int],
@@ -283,6 +517,7 @@ def build_rank_data(
     all_test_candidates: list[int],
     strategy: str,
     seed: int,
+    feature_set: str = "cheap",
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     rng = random.Random(seed)
     xs: list[np.ndarray] = []
@@ -300,7 +535,7 @@ def build_rank_data(
             100,
             rng,
         )
-        xs.append(query_features(model, src, candidates, time_value))
+        xs.append(query_features(model, src, candidates, time_value, structural_context, feature_set))
         ys.append(np.asarray([1 if candidate == dst else 0 for candidate in candidates], dtype=np.int32))
         groups.append(len(candidates))
     return np.vstack(xs).astype(np.float32), np.concatenate(ys), groups
@@ -322,6 +557,7 @@ def predict_ranker(ranker, x: np.ndarray) -> np.ndarray:
 def evaluate(
     ranker,
     model: HistoryBaseline,
+    structural_context: StructuralContext | None,
     positives: list[tuple[int, int, int]],
     all_dsts: list[int],
     popular_dsts: list[int],
@@ -332,6 +568,7 @@ def evaluate(
     strategy: str,
     seed: int,
     blend_weight: float,
+    feature_set: str = "cheap",
 ) -> EvalRow:
     rng = random.Random(seed)
     base_rr = 0.0
@@ -352,7 +589,7 @@ def evaluate(
             100,
             rng,
         )
-        x = query_features(model, src, candidates, time_value)
+        x = query_features(model, src, candidates, time_value, structural_context, feature_set)
         base_scores = x[:, 0]
         ranker_scores = predict_ranker(ranker, x)
         blend_scores = ranker_scores if blend_weight == 0.0 else base_scores + blend_weight * ranker_scores
@@ -386,10 +623,12 @@ def write_submission(
     primary_zip: Path,
     ranker,
     model: HistoryBaseline,
+    structural_context: StructuralContext | None,
     scene: str,
     blend_weight: float,
     score_mode: str,
     batch_size: int,
+    feature_set: str,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as output_zip:
@@ -431,7 +670,7 @@ def write_submission(
                                 src = int(row[0])
                                 time_value = int(row[1])
                                 candidates = [int(value) for value in row[2:]]
-                                x = query_features(model, src, candidates, time_value)
+                                x = query_features(model, src, candidates, time_value, structural_context, feature_set)
                                 features_batch.append(x)
                                 counts.append(len(candidates))
                                 if len(features_batch) >= batch_size:
@@ -461,6 +700,9 @@ def main() -> None:
         all_dsts = sorted({dst for _, dst, _ in history_rows})
         popular_dsts = [dst for dst, _ in Counter(dst for _, dst, _ in history_rows).most_common(10000)]
         src_test_candidates, all_test_candidates = load_test_candidate_pools(data_zip, args.scene)
+        structural_context = None
+        if args.feature_set != "base":
+            structural_context = StructuralContext(history_rows, src_test_candidates, all_test_candidates)
 
         print(
             f"building rank data scene={args.scene} train_queries={len(train_pos)} "
@@ -469,6 +711,7 @@ def main() -> None:
         )
         x_train, y_train, group_train = build_rank_data(
             history_model,
+            structural_context,
             train_pos,
             all_dsts,
             popular_dsts,
@@ -476,9 +719,11 @@ def main() -> None:
             all_test_candidates,
             args.strategy,
             args.seed,
+            args.feature_set,
         )
         x_valid, y_valid, group_valid = build_rank_data(
             history_model,
+            structural_context,
             valid_pos,
             all_dsts,
             popular_dsts,
@@ -486,6 +731,7 @@ def main() -> None:
             all_test_candidates,
             args.strategy,
             args.seed + 1,
+            args.feature_set,
         )
 
         ranker = LGBMRanker(
@@ -519,6 +765,7 @@ def main() -> None:
                 evaluate(
                     ranker,
                     history_model,
+                    structural_context,
                     valid_pos,
                     all_dsts,
                     popular_dsts,
@@ -529,6 +776,26 @@ def main() -> None:
                     strategy,
                     args.seed + 19,
                     0.0 if args.score_mode == "ranker" else args.blend_weight,
+                    args.feature_set,
+                )
+            )
+        if args.strategy != "temporal_struct_hard":
+            reports.append(
+                evaluate(
+                    ranker,
+                    history_model,
+                    structural_context,
+                    valid_pos,
+                    all_dsts,
+                    popular_dsts,
+                    src_test_candidates,
+                    all_test_candidates,
+                    args.scene,
+                    "local",
+                    "temporal_struct_hard",
+                    args.seed + 19,
+                    0.0 if args.score_mode == "ranker" else args.blend_weight,
+                    args.feature_set,
                 )
             )
 
@@ -550,16 +817,25 @@ def main() -> None:
 
         if not args.no_write_submission:
             full_model = fit_history([(src, dst, time_value) for src, dst, time_value, _ in rows])
+            full_structural_context = None
+            if args.feature_set != "base":
+                full_structural_context = StructuralContext(
+                    [(src, dst, time_value) for src, dst, time_value, _ in rows],
+                    src_test_candidates,
+                    all_test_candidates,
+                )
             write_submission(
                 data_zip,
                 args.output,
                 args.primary_zip,
                 ranker,
                 full_model,
+                full_structural_context,
                 args.scene,
                 args.blend_weight,
                 args.score_mode,
                 args.write_batch_size,
+                args.feature_set,
             )
             print(f"submission candidate saved to {args.output}", flush=True)
 
