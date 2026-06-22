@@ -54,14 +54,30 @@ class FeatureStore:
         self.node_count: Counter[int] = Counter()
         self.test_freq: Counter[int] = Counter(all_test_candidates)
         self.src_test_freq = {src: Counter(cands) for src, cands in test_src_candidates.items()}
+        self.src_test_pool_size = {src: len(set(cands)) for src, cands in test_src_candidates.items()}
         self.co_recent: dict[int, Counter[int]] = defaultdict(Counter)
+        self.dst_recent_windows = {0.01: Counter(), 0.05: Counter(), 0.10: Counter()}
+        self.transition_recent_windows = {0.01: defaultdict(Counter), 0.05: defaultdict(Counter), 0.10: defaultdict(Counter)}
 
-        for src, dst, time_value in sorted(rows, key=lambda value: value[2]):
+        ordered_rows = sorted(rows, key=lambda value: value[2])
+        window_cuts = {}
+        for frac in self.dst_recent_windows:
+            start = int(len(ordered_rows) * (1.0 - frac))
+            window_cuts[frac] = max(0, min(len(ordered_rows), start))
+
+        for row_index, (src, dst, time_value) in enumerate(ordered_rows):
             self.model.update(src, dst, time_value)
             recent = self.src_history[src][-12:]
             for prev in recent:
                 if prev != dst:
                     self.co_recent[prev][dst] += 1
+            for frac, start in window_cuts.items():
+                if row_index >= start:
+                    self.dst_recent_windows[frac][dst] += 1
+                    if recent:
+                        prev = recent[-1]
+                        if prev != dst:
+                            self.transition_recent_windows[frac][prev][dst] += 1
             self.src_history[src].append(dst)
             self.src_unique[src].add(dst)
             self.dst_sources[dst].add(src)
@@ -71,6 +87,15 @@ class FeatureStore:
         self.max_test_log = max((math.log1p(v) for v in self.test_freq.values()), default=1.0)
         self.max_node_log = max((math.log1p(v) for v in self.node_count.values()), default=1.0)
         self.max_co_log = max((math.log1p(v) for counts in self.co_recent.values() for v in counts.values()), default=1.0)
+        self.max_recent_window_log = {
+            frac: max((math.log1p(v) for v in counts.values()), default=1.0)
+            for frac, counts in self.dst_recent_windows.items()
+        }
+        self.total_co = sum(sum(counts.values()) for counts in self.co_recent.values()) or 1
+        self.co_src_totals = Counter({src: sum(counts.values()) for src, counts in self.co_recent.items()})
+        self.co_dst_totals: Counter[int] = Counter()
+        for counts in self.co_recent.values():
+            self.co_dst_totals.update(counts)
 
     def raw_feature(self, src: int, dst: int, time_value: int) -> list[float]:
         model = self.model
@@ -83,6 +108,8 @@ class FeatureStore:
         transition = 0.0
         motif = 0.0
         motif_recent = 0.0
+        recent_transition_features: list[float] = []
+        pmi_score = 0.0
         for offset, prev in enumerate(reversed(recent[-20:]), start=1):
             transition += model.transition_count.get(prev, {}).get(dst, 0) / offset
             count = self.co_recent.get(prev, {}).get(dst, 0)
@@ -90,11 +117,21 @@ class FeatureStore:
                 value = math.log1p(count) / self.max_co_log
                 motif += value / math.sqrt(offset)
                 motif_recent += value / offset
+                denom = max(1, self.co_src_totals.get(prev, 0) * self.co_dst_totals.get(dst, 0))
+                pmi_score += max(0.0, math.log((count * self.total_co) / denom)) / offset
+            if offset == 1:
+                for frac in (0.01, 0.05, 0.10):
+                    recent_transition_features.append(
+                        math.log1p(self.transition_recent_windows[frac].get(prev, {}).get(dst, 0))
+                    )
+        if not recent_transition_features:
+            recent_transition_features = [0.0, 0.0, 0.0]
         repeat_distance = 0.0
         if dst in recent:
             repeat_distance = 1.0 / (1.0 + len(recent) - 1 - max(i for i, value in enumerate(recent) if value == dst))
         dst_source_overlap = 1.0 if src in self.dst_sources.get(dst, set()) else 0.0
         src_test_count = self.src_test_freq.get(src, Counter()).get(dst, 0)
+        src_test_pool_size = self.src_test_pool_size.get(src, 0)
         time_span = max(1, (model.max_time or time_value) - (model.min_time or time_value))
         return [
             model.score(src, dst, time_value),
@@ -118,7 +155,14 @@ class FeatureStore:
             dst_source_overlap,
             math.log1p(self.test_freq.get(dst, 0)) / self.max_test_log if self.test_freq.get(dst, 0) else 0.0,
             math.log1p(src_test_count),
+            src_test_pool_size / 1000.0,
+            math.log1p(src_test_count) / math.log1p(max(1, src_test_pool_size)),
             (time_value - (model.min_time or time_value)) / time_span,
+            math.log1p(self.dst_recent_windows[0.01].get(dst, 0)) / self.max_recent_window_log[0.01],
+            math.log1p(self.dst_recent_windows[0.05].get(dst, 0)) / self.max_recent_window_log[0.05],
+            math.log1p(self.dst_recent_windows[0.10].get(dst, 0)) / self.max_recent_window_log[0.10],
+            *recent_transition_features,
+            pmi_score,
         ]
 
     def query_features(self, src: int, candidates: list[int], time_value: int) -> np.ndarray:
