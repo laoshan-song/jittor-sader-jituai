@@ -9,6 +9,7 @@ __pycache__/
 runs/
 checkpoints/
 outputs/
+formal/track1_dynamic_recommendation/
 *.log
 
 # Data, weights, and generated artifacts are kept out of the open-source repo.

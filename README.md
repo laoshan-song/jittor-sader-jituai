@@ -1,9 +1,10 @@
 # jittor-sader-jituai
 
-第六届计图人工智能挑战赛项目仓库。当前包含热身赛一和正式赛道一：
+第六届计图人工智能挑战赛项目仓库。当前公开内容保留热身赛一：
 
 - 热身赛一：基于 Cora 引文网络的 GCN 节点分类
-- 正式赛道一：基于图学习的动态推荐任务
+
+正式赛道一代码按比赛补充规则暂不公开，将在赛程允许的阶段再整理开源。
 
 ## Environment
 
@@ -38,16 +39,6 @@ warmups/cora_gcn/data/cora.pkl
 The dataset file is not tracked in Git. The expected fields are described in
 [warmups/cora_gcn/README.md](warmups/cora_gcn/README.md).
 
-Track 1: place the official A leaderboard data zip outside this repository:
-
-```text
-../data_A.zip
-```
-
-The zip file should contain scene folders such as `dataset1/` and `dataset2/`,
-each with `train.csv` and `test.csv`. See
-[formal/track1_dynamic_recommendation/README.md](formal/track1_dynamic_recommendation/README.md).
-
 ## Training
 
 Run the warm-up training script:
@@ -64,17 +55,6 @@ python warmups/cora_gcn/gcn.py \
 The script trains a two-layer GCN and reports training accuracy and best
 validation accuracy.
 
-Run the Track 1 heuristic baseline:
-
-```bash
-python formal/track1_dynamic_recommendation/baseline.py \
-  --data-zip ../data_A.zip \
-  --output outputs/track1/result.zip
-```
-
-It scores each row's 100 candidate target nodes with historical interaction,
-recency, and popularity features.
-
 ## Evaluation And Inference
 
 The competition warm-up release evaluates the generated `result.json` on the
@@ -90,20 +70,12 @@ zip ../../submissions/warmup1-result.zip result.json
 `result.json` and submission archives are generated artifacts and are ignored by
 Git.
 
-For Track 1, submit the generated `outputs/track1/result.zip`. It contains one
-CSV file per scene, for example `dataset1.csv` and `dataset2.csv`. Each row has
-100 probabilities in the same order as the corresponding test candidates.
-
 ## Results
 
 - Task: warm-up 1, Cora node classification
 - Metric: accuracy on node labels
 - Local best validation accuracy: 0.8120
 - Platform submission status: passed
-
-Track 1 uses MRR on candidate rankings. The baseline is intended to produce a
-valid first submission and a reproducible starting point for stronger graph
-models.
 
 The local validation score may differ slightly across machines because Jittor,
 CPU/GPU kernels, and random initialization can vary. Use `--seed` to keep runs
@@ -114,10 +86,6 @@ as reproducible as possible.
 ```text
 .
 ├── docs/                         # competition notes
-├── formal/
-│   └── track1_dynamic_recommendation/
-│       ├── baseline.py           # Track 1 submission baseline
-│       └── README.md             # Track 1 task notes
 ├── scripts/                      # environment/helper scripts
 ├── submissions/                  # generated submission archives, ignored
 ├── warmups/
