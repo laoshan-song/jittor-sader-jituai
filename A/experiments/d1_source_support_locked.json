@@ -1,0 +1,34 @@
+{
+  "kind": "dataset1_source_candidate_support_locked_rule",
+  "frozen_at": "2026-07-25T13:47:00+08:00",
+  "official_train_sha256": "b679e4fe458d16c22c1cb12c52b013a8363c2191e25d913b3c763e8376bfc53e",
+  "candidate_universe": "sorted_unique_official_dataset1_test_candidates",
+  "candidate_universe_size": 23852,
+  "replay": {
+    "width": 100,
+    "negative_sampling": "uniform_without_replacement_excluding_target",
+    "label_position": "numpy_pcg64_uniform_0_99",
+    "seeds": [20260751, 20260752, 20260753, 20260754, 20260755]
+  },
+  "signal": "count of rows containing candidate within the same source over the complete target interval",
+  "winner_tie_break": "lowest candidate column",
+  "rule": {
+    "minimum_winner_support": 4,
+    "minimum_support_gap": 2,
+    "action": "promote_unique_support_winner_to_rank_1"
+  },
+  "development_intervals": {
+    "D1_A": [113762358, 119040002],
+    "D1_B": [119040002, 124317646],
+    "D1_C": [124317646, 129595290]
+  },
+  "locked_intervals": {
+    "D1_PRE_A": [103207070, 108484714],
+    "D1_PRE_B": [108484714, 113762358]
+  },
+  "notes": [
+    "A/B/C were inspected while selecting the rule and are development-only for this direction.",
+    "PRE_A/PRE_B signal metrics had not been read when this manifest was written.",
+    "Frozen production checkpoints contain later labels and are sensitivity baselines only; a causal baseline must be reported separately."
+  ]
+}
