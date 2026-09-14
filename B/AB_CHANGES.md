@@ -8,6 +8,7 @@ serialization.
 | Contract | A list | B list adaptation |
 | --- | --- | --- |
 | Fixed base member | retained `base_result.zip` | compact retained base checkpoint |
+| Base origin | official-data raw training | official-data full pipeline in `generation/` |
 | Jittor model | BPR32 candidate signal | MF32 source-candidate signal |
 | Candidate processing | bounded candidate-local residual | bounded candidate-local residual |
 | Data organization | A-list entity tables and batches | expanded entity tables and streaming batches |
@@ -19,6 +20,22 @@ batches for the larger query set. Dataset3 uses an official-training-data
 target-frequency statistic; Dataset4 uses a 32-dimensional Jittor implicit
 preference model. Both feed the same candidate-local fusion and deterministic
 serialization stages.
+
+## Frozen base generation
+
+The retained frozen base is no longer opaque: `generation/` reconstructs it
+from the official data. `generation/reproduce_third_1.py` trains every
+Dataset3/Dataset4 component from scratch and emits the base score matrices, and
+`generation/pack_frozen_base.py` — the exact inverse of the
+`code/build_submission.py` decoders — packs them into `frozen_base.ckpt`
+(Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). This makes the base an
+end-to-end product of official data rather than a fixed input.
+
+The regeneration is an **approximate** reconstruction, not a byte-exact one:
+some historical stacker/pair-new checkpoints are not shipped, and Jittor's CUDA
+operators are not bit-identical across machines, so low-order score bits drift.
+Byte-for-byte reproduction of the recorded submission therefore remains with
+`run_verify.sh` and the retained locked base.
 
 For the recorded B-list result, the reviewer supplies the official
 `data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint
