@@ -98,21 +98,6 @@ def main() -> int:
         c2_args.append("--quick")
     run(c2_args, C2_ROOT, env, logs / "reproduce_c2.log")
 
-    if args.quick:
-        receipt = {
-            "kind": "b_rank_d34_c3_reproduction_smoke_v2",
-            "decision": "SMOKE_ONLY",
-            "data_sha256": DATA_SHA256,
-            "quick": True,
-            "c2_receipt": str(c2_work / "REPRODUCTION_RECEIPT.json"),
-        }
-        (work / "REPRODUCTION_RECEIPT.json").write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print(json.dumps(receipt, indent=2, sort_keys=True))
-        return 0
-
     c2_zip = c2_work / "b_rank_d34_c2_source_session.zip"
     c2_manifest = c2_zip.with_suffix(".manifest.json")
     ensemble = c2_work / "reports" / "dataset3_ensemble.json"

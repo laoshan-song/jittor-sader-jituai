@@ -622,7 +622,7 @@ def _pairnew_contract(path: Path, control_path: Path) -> dict[str, Any]:
         members = training.get("members")
         _require(
             training.get("requested_rows_per_replay") == 50000
-            and int(training.get("pair_new_rows", 0)) > 0
+            and training.get("pair_new_rows") == 87144
             and isinstance(members, list)
             and [int(member["seed"]) for member in members]
             == [20260841, 20260842, 20260843, 20260844, 20260845, 20260846]
@@ -630,7 +630,12 @@ def _pairnew_contract(path: Path, control_path: Path) -> dict[str, Any]:
             == [64, 64, 64, 96, 96, 96],
             "scaled v21 training contract differs",
         )
-        frozen = report.get("frozen_v12_same_rows")
+        frozen = report.get("frozen_v12_same_rows", {})
+        _require(
+            frozen.get("sha256")
+            == "7d566b9793e054a1351653d5bfccd708379069e5b4b87e15f448ddce0fc1ebf5",
+            "scaled v21 frozen v12 baseline differs",
+        )
         if kind == "d4_pairnew_rank_slot_weighted_scaled_v21_c2":
             weights = np.asarray(report.get("member_weights"), dtype=np.float64)
             selected = report.get("selected", {})
@@ -643,29 +648,21 @@ def _pairnew_contract(path: Path, control_path: Path) -> dict[str, Any]:
                 and np.allclose(weights, selected.get("weights")),
                 "c2 weighted member selection differs",
             )
-        if frozen is not None:
-            _require(
-                frozen.get("sha256")
-                == "7d566b9793e054a1351653d5bfccd708379069e5b4b87e15f448ddce0fc1ebf5",
-                "scaled v21 frozen v12 baseline differs",
+        minimum_deltas = {
+            ("history", "holdout"): 0.010,
+            ("history", "confirmation"): 0.002,
+            ("test_pool", "holdout"): 0.015,
+            ("test_pool", "confirmation"): 0.002,
+        }
+        for (strategy, split), minimum in minimum_deltas.items():
+            candidate = float(report["metrics"][strategy][split]["candidate"]["mrr"])
+            baseline = float(
+                frozen["metrics"][strategy][split]["candidate"]["mrr"]
             )
-            minimum_deltas = {
-                ("history", "holdout"): 0.010,
-                ("history", "confirmation"): 0.002,
-                ("test_pool", "holdout"): 0.015,
-                ("test_pool", "confirmation"): 0.002,
-            }
-            for (strategy, split), minimum in minimum_deltas.items():
-                candidate = float(
-                    report["metrics"][strategy][split]["candidate"]["mrr"]
-                )
-                baseline = float(
-                    frozen["metrics"][strategy][split]["candidate"]["mrr"]
-                )
-                _require(
-                    candidate - baseline >= minimum,
-                    f"scaled v21 direct delta regressed: {strategy} {split}",
-                )
+            _require(
+                candidate - baseline >= minimum,
+                f"scaled v21 direct delta regressed: {strategy} {split}",
+            )
     return report
 
 

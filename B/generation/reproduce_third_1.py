@@ -89,6 +89,9 @@ def main() -> int:
     parser.add_argument("--gpus", default="0", help="comma-separated GPU ids; the first is used by default")
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
+    parser.add_argument("--mf-embedding-dim", type=int, default=512)
+    parser.add_argument("--mf-negative-count", type=int, default=64)
+    parser.add_argument("--mf-epochs", type=int, default=3)
     parser.add_argument("--quick", action="store_true", help="compile/Jittor smoke only; not submittable")
     args = parser.parse_args()
     args.data = args.data.resolve()
@@ -101,6 +104,8 @@ def main() -> int:
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("--gpus must contain at least one id")
+    if min(args.mf_embedding_dim, args.mf_negative_count, args.mf_epochs) < 1:
+        raise ValueError("MF dimensions, negative count, and epochs must be positive")
     env = env_for(args, work, gpus[0])
     py_compile(env)
     if args.quick:
@@ -226,11 +231,11 @@ def main() -> int:
                 "--seed",
                 str(seed),
                 "--embedding-dim",
-                "32",
+                str(args.mf_embedding_dim),
                 "--negative-count",
-                "32",
+                str(args.mf_negative_count),
                 "--epochs",
-                "3",
+                str(args.mf_epochs),
                 "--batch-rows",
                 "4096",
             ],
@@ -255,11 +260,11 @@ def main() -> int:
             "--seed",
             "20260812",
             "--embedding-dim",
-            "32",
+            str(args.mf_embedding_dim),
             "--negative-count",
-            "32",
+            str(args.mf_negative_count),
             "--epochs",
-            "3",
+            str(args.mf_epochs),
             "--batch-rows",
             "4096",
         ],
@@ -284,19 +289,9 @@ def main() -> int:
     ]
     for name, report in mf_reports:
         fit_common += ["--mf", name, checkpoint(report)]
+    fit_common += ["--transition-mf", "transition_mf_seed12", checkpoint(transition / "deploy_report.json")]
     run(
-        [
-            *fit_common,
-            "--control-only",
-            "--run-dir",
-            str(control_fit),
-            "--valid-groups",
-            "60000",
-            "--confirm-groups",
-            "30000",
-            "--batch-rows",
-            "512",
-        ],
+        [*fit_common, "--run-dir", str(control_fit), "--valid-groups", "60000", "--confirm-groups", "30000", "--batch-rows", "512"],
         CODE,
         env,
         logs / "06_fit_control.log",
@@ -304,19 +299,16 @@ def main() -> int:
     control_report = control_fit / "research_report.json"
     pairnew = work / "pairnew_fit"
     pair_members = []
-    for hidden, seed in ((64, 20260841), (64, 20260842), (64, 20260843), (96, 20260844), (96, 20260845), (96, 20260846)):
+    for hidden, seed in ((64, 20260815), (64, 20260816), (64, 20260817), (96, 20260818), (96, 20260819), (96, 20260820)):
         pair_members += ["--residual-member", str(hidden), str(seed)]
     run(
         [
             *fit_common,
-            "--transition-mf",
-            "transition_mf_seed12",
-            checkpoint(transition / "deploy_report.json"),
             "--pairnew-transformer",
             "--control-fit",
             str(control_report),
             "--residual-train-rows",
-            "50000",
+            "20000",
             "--residual-epochs",
             "6",
             "--residual-batch-rows",
@@ -589,6 +581,10 @@ def main() -> int:
         "neural_framework": "Jittor",
         "weights_in_package": False,
         "external_data_used": False,
+        "teacher_answers_used": False,
+        "mf_embedding_dim": args.mf_embedding_dim,
+        "mf_negative_count": args.mf_negative_count,
+        "mf_epochs": args.mf_epochs,
         "final_report": str(final_report),
         "output": str(output),
     }

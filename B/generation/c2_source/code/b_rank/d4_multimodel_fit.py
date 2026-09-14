@@ -812,95 +812,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             control_gated, labels, segments
         )
 
-    if args.control_only:
-        control_names = [names[index] for index in control_indices]
-        control_reports = {}
-        control_checks = {
-            "multi_model_active": int(np.count_nonzero(control_weights > 1e-12)) > 1
-            and (control_seen_alpha > 0.0 or control_new_alpha > 0.0),
-        }
-        for (strategy, split), (scores, labels, seen, segments, _) in scored.items():
-            mixed = np.tensordot(
-                control_weights, scores[control_indices], axes=(0, 0)
-            )
-            gated = _gated_score(
-                scores[control_best_index],
-                mixed,
-                seen,
-                control_seen_alpha,
-                control_new_alpha,
-            )
-            individual = {
-                name: _metrics(scores[index], labels, segments)
-                for name, index in zip(control_names, control_indices)
-            }
-            section = {
-                "individual": individual,
-                "convex": _metrics(mixed, labels, segments),
-                "gated": _metrics(gated, labels, segments),
-            }
-            control_reports.setdefault(strategy, {})[split] = section
-            base_report = individual[names[control_best_index]]
-            tolerance = 0.0005 if strategy == "history" else 0.001
-            control_checks[f"{strategy}_{split}_overall"] = (
-                _segment_mrr(section["gated"], "overall")
-                >= _segment_mrr(base_report, "overall") - tolerance
-            )
-            for segment in ("pair_new", "pair_seen", "source_hot"):
-                control_checks[f"{strategy}_{split}_{segment}"] = (
-                    _segment_mrr(section["gated"], segment)
-                    >= _segment_mrr(base_report, segment) - 0.003
-                )
-        validation = control_reports["history"]["validation"]
-        control_checks["history_validation_improves"] = (
-            validation["gated"]["mrr"]
-            > validation["individual"][names[control_best_index]]["mrr"]
-        )
-        source_files = (
-            Path(__file__).resolve(),
-            Path(data_features.__file__).resolve(),
-            Path(temporal_attention_jittor.__file__).resolve(),
-            Path(temporal_history.__file__).resolve(),
-            Path(implicit_mf_jittor.__file__).resolve(),
-            Path(pool_association.__file__).resolve(),
-            Path(d4_transition_research.__file__).resolve(),
-        )
-        report = {
-            "kind": "d4_multimodel_fit_v1",
-            "decision": "PASS" if all(control_checks.values()) else "NO_GO",
-            "created_utc": datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat(),
-            "data_sha256": verify_run.EXPECTED_DATA_SHA256,
-            "selection_replay": "history validation only",
-            "component_names": control_names,
-            "best_component": names[control_best_index],
-            "convex_validation_mrr": control_convex_mrr,
-            "weights": {
-                name: float(weight)
-                for name, weight in zip(control_names, control_weights)
-            },
-            "seen_alpha": control_seen_alpha,
-            "new_alpha": control_new_alpha,
-            "gate_trace": control_gate_trace,
-            "metrics": control_reports,
-            "checks": control_checks,
-            "group_metadata": group_metadata,
-            "pool_activity": pool_activity,
-            "temporal_models": temporal_records,
-            "mf_models": mf_records,
-            "runtime": {
-                "jittor": str(temporal_attention_jittor.jt.__version__),
-                "has_cuda": bool(temporal_attention_jittor.jt.has_cuda),
-                "use_cuda": bool(temporal_attention_jittor.jt.flags.use_cuda),
-            },
-            "source_hashes": {path.name: _sha256(path) for path in source_files},
-            "confirmation_excluded_from_selection": True,
-            "test_pool_is_diagnostic_only": True,
-        }
-        _atomic_json(run_dir / "research_report.json", report)
-        return report
-
     checks = {
         "multi_model_active": int(np.count_nonzero(weights > 1e-12)) > 1
         and (seen_alpha > 0.0 or new_alpha > 0.0),
@@ -1035,11 +946,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="confirmation rows; 0 uses the complete temporal block",
     )
     parser.add_argument("--pairnew-transformer", action="store_true")
-    parser.add_argument(
-        "--control-only",
-        action="store_true",
-        help="fit and publish only the non-innovation causal control",
-    )
     parser.add_argument("--score-cache-only", action="store_true")
     parser.add_argument("--score-cache-dir", type=Path)
     parser.add_argument(

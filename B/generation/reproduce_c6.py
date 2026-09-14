@@ -114,21 +114,6 @@ def main() -> int:
         c5_args.append("--quick")
     run(c5_args, ROOT, env, logs / "reproduce_c5.log")
 
-    if args.quick:
-        receipt = {
-            "kind": "b_rank_d34_c6_reproduction_smoke_v2",
-            "decision": "SMOKE_ONLY",
-            "data_sha256": DATA_SHA256,
-            "quick": True,
-            "c5_receipt": str(c5_work / "REPRODUCTION_RECEIPT.json"),
-        }
-        (work / "REPRODUCTION_RECEIPT.json").write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print(json.dumps(receipt, indent=2, sort_keys=True))
-        return 0
-
     ensemble = c5_work / "prerequisite" / "c2" / "reports" / "dataset3_ensemble.json"
     gate_reports = []
     if not args.quick:

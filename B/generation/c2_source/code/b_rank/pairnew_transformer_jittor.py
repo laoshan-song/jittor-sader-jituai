@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D4 pair-new rank-slot Transformer anchored to a validated control."""
+"""D4 pair-new rank-slot Transformer anchored to a frozen control."""
 
 from __future__ import annotations
 
@@ -27,6 +27,9 @@ DEFAULT_MEMBERS = ((64, 20260813), (96, 20260814))
 LAYERS = 2
 HEADS = 4
 RESIDUAL_SCALE = 1.0
+EXPECTED_CONTROL_SHA256 = (
+    "86c38a86fafcadaa43deb3b196ad5e60f511ce779a1e6944a95c5d7a02643c4e"
+)
 EXPECTED_V12_REPORT_SHA256 = (
     "7d566b9793e054a1351653d5bfccd708379069e5b4b87e15f448ddce0fc1ebf5"
 )
@@ -122,11 +125,12 @@ def _mrr(scores: np.ndarray, labels: np.ndarray) -> float:
 def _control_contract(
     path: Path, component_names: list[str]
 ) -> tuple[dict[str, Any], np.ndarray, int, float, float]:
+    if _sha256(path) != EXPECTED_CONTROL_SHA256:
+        raise ValueError("control fit is not the online-1.149 frozen fit report")
     report = json.loads(path.read_text(encoding="utf-8"))
     if (
         report.get("kind") not in {"d4_multimodel_fit_v1", "d4_poolset_multimodel_fit_v1"}
         or report.get("decision") != "PASS"
-        or report.get("data_sha256") != EXPECTED_DATA_SHA256
         or report.get("selection_replay") != "history validation only"
         or report.get("confirmation_excluded_from_selection") is not True
         or report.get("test_pool_is_diagnostic_only") is not True

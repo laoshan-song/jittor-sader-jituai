@@ -9,7 +9,7 @@ then packs them into ``models/frozen_base.ckpt`` so the existing
 ``code/build_submission.py`` reranker can consume them.
 
     official data_B.zip
-      -> generation/reproduce_third_1.py   (train D3/D4 from scratch -> result.zip)
+      -> generation/reproduce.py            (end-to-end D3/D4 training -> result.zip)
       -> generation/pack_frozen_base.py     (score matrices -> frozen_base.ckpt)
       -> code/build_submission.py           (frozen base + MF32 residual -> result.zip)
 
@@ -39,7 +39,7 @@ DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
 TARGET_ONLINE_SCORE = 1.5240999401892983
 TARGET_LOCKED_BASE_SHA256 = "e46182a6114b0089b9e05d03672b93c28758624ef02b7d97357b1994cddf3d18"
 HERE = Path(__file__).resolve().parent
-PIPELINE = HERE / "reproduce_third_1.py"
+PIPELINE = HERE / "reproduce.py"
 PACKER = HERE / "pack_frozen_base.py"
 
 
@@ -77,7 +77,7 @@ def main() -> int:
         sys.executable, str(PIPELINE),
         "--data", str(data),
         "--work-dir", str(pipeline_work),
-        "--gpus", str(args.gpu),
+        "--gpu", str(args.gpu),
     ]
     if args.jittor_home:
         command += ["--jittor-home", str(args.jittor_home.resolve())]
@@ -101,7 +101,8 @@ def main() -> int:
         print(json.dumps(receipt, indent=2, sort_keys=True))
         return 0
 
-    result_zip = pipeline_work / "result.zip"
+    # reproduce.py writes the trained submission to <its work-dir>/pipeline/result.zip
+    result_zip = pipeline_work / "pipeline" / "result.zip"
     if not result_zip.is_file():
         raise FileNotFoundError(f"pipeline did not produce {result_zip}")
 

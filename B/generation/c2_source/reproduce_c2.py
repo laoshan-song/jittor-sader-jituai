@@ -124,42 +124,6 @@ def main() -> int:
     aenv = env_for(work / "runtime" / "d3", args.gpu, jittor_home, cuda_home)
     denv = env_for(work / "runtime" / "d4", args.gpu, jittor_home, cuda_home)
 
-    if args.quick:
-        python_files = [str(path) for path in ROOT.rglob("*.py")]
-        subprocess.run(
-            [sys.executable, "-m", "py_compile", *python_files],
-            cwd=ROOT,
-            env=denv,
-            check=True,
-        )
-        smoke = (
-            "from b_rank import d4_multimodel_fit, d4_transition_mf_deploy; "
-            "import jittor as jt; "
-            "jt.flags.use_cuda = 1; "
-            "value = (jt.array([[1.0, 2.0]]) * 2).numpy().tolist(); "
-            "assert value == [[2.0, 4.0]]; "
-            "print('c2_jittor_linkage=PASS')"
-        )
-        run(
-            [sys.executable, "-c", smoke],
-            CODE,
-            denv,
-            logs / "quick_linkage.log",
-        )
-        receipt = {
-            "kind": "b_rank_d34_c2_reproduction_smoke_v2",
-            "decision": "SMOKE_ONLY",
-            "data_sha256": DATA_SHA256,
-            "quick": True,
-            "transition_module_present": True,
-        }
-        (work / "REPRODUCTION_RECEIPT.json").write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print(json.dumps(receipt, indent=2, sort_keys=True))
-        return 0
-
     # D3 control is trained from official data, then exposed as a source ZIP for D4.
     train_grid(data, "dataset3", models / "dataset3", args.quick, aenv, logs)
     d3_report = reports / "dataset3_ensemble.json"
@@ -202,45 +166,16 @@ def main() -> int:
     for path in mf:
         seed = path.name.removeprefix("d4_mf_")
         fit_common += ["--mf", f"fullhistory_mf_seed{seed}", checkpoint_path(path / "deploy_report.json")]
-    fit_limits = [
-        "--valid-groups", "256" if args.quick else "60000",
-        "--confirm-groups", "256" if args.quick else "30000",
-        "--batch-rows", "64" if args.quick else "512",
-    ]
-    run(
-        [
-            *fit_common,
-            *fit_limits,
-            "--control-only",
-            "--run-dir",
-            str(work / "d4_control"),
-        ],
-        CODE,
-        denv,
-        logs / "fit_d4_control.log",
-    )
+    fit_common += ["--transition-mf", "transition_mf_seed12", checkpoint_path(transition / "deploy_report.json"),
+                   "--valid-groups", "256" if args.quick else "60000", "--confirm-groups", "256" if args.quick else "30000",
+                   "--batch-rows", "64" if args.quick else "512"]
+    run(fit_common + ["--run-dir", str(work / "d4_control")], CODE, denv, logs / "fit_d4_control.log")
     control_report = work / "d4_control" / "research_report.json"
-    pair_common = fit_common + [
-        "--transition-mf",
-        "transition_mf_seed12",
-        checkpoint_path(transition / "deploy_report.json"),
-        *fit_limits,
-        "--pairnew-transformer",
-        "--control-fit",
-        str(control_report),
-        "--residual-train-rows",
-        "128" if args.quick else "50000",
-        "--residual-epochs",
-        "1" if args.quick else "6",
-        "--residual-batch-rows",
-        "64" if args.quick else "128",
-        "--run-dir",
-        str(work / "d4_pairnew"),
-    ]
+    pair_common = fit_common + ["--pairnew-transformer", "--control-fit", str(control_report), "--residual-train-rows", "128" if args.quick else "20000", "--residual-epochs", "1" if args.quick else "6", "--residual-batch-rows", "64" if args.quick else "128", "--run-dir", str(work / "d4_pairnew")]
     if not args.quick:
         for hidden, seed in (
-            (64, 20260841), (64, 20260842), (64, 20260843),
-            (96, 20260844), (96, 20260845), (96, 20260846),
+            (64, 20260815), (64, 20260816), (64, 20260817),
+            (96, 20260818), (96, 20260819), (96, 20260820),
         ):
             pair_common += ["--residual-member", str(hidden), str(seed)]
     run(pair_common, CODE, denv, logs / "fit_d4_pairnew.log")

@@ -135,21 +135,6 @@ def main() -> int:
         c3_args += ["--quick"]
     run(c3_args, ROOT, env, logs / "reproduce_c3.log")
 
-    if args.quick:
-        receipt = {
-            "kind": "b_rank_d34_c5_reproduction_smoke_v2",
-            "decision": "SMOKE_ONLY",
-            "data_sha256": DATA_SHA256,
-            "quick": True,
-            "c3_receipt": str(prerequisite / "REPRODUCTION_RECEIPT.json"),
-        }
-        (work / "REPRODUCTION_RECEIPT.json").write_text(
-            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print(json.dumps(receipt, indent=2, sort_keys=True))
-        return 0
-
     c3_zip = prerequisite / "c3" / "b_rank_d34_c3_multiscale.zip"
     c3_manifest = c3_zip.with_suffix(".manifest.json")
     ensemble = prerequisite / "c2" / "reports" / "dataset3_ensemble.json"
