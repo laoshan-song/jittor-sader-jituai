@@ -17,10 +17,10 @@ source "$ROOT/code/prepare_cuda_runtime.sh" "$PYTHON"
 BASE="$MODELS/base_result.zip"
 if [[ ! -f "$BASE" ]]; then
   echo "fresh base missing; rebuilding it from official training data" >&2
-  "$PYTHON" "$ROOT/raw_training/build_base.py" --data "$DATA" --output "$BASE"
+  "$PYTHON" "$ROOT/code/raw_training/build_base.py" --data "$DATA" --output "$BASE"
 fi
 "$PYTHON" "$ROOT/code/build_submission.py" \
   --data "$DATA" --base "$BASE" \
   --checkpoint "$MODELS/d4_implicit_mf32.npz" --output-dir "$OUT" --unlocked
-exec "$PYTHON" "$ROOT/raw_training/verify_fresh_run.py" \
+exec "$PYTHON" "$ROOT/code/raw_training/verify_fresh_run.py" \
   --model-dir "$MODELS" --output-dir "$OUT" --output "$OUT/FRESH_RUN_RECEIPT.json"

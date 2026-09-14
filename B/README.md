@@ -98,7 +98,7 @@ bash run_fresh_inference.sh /path/to/data_B.zip \
   /data1/track1-b-models /data1/track1-b-output 0
 ```
 
-`raw_training/main.py` coordinates Jittor MF32 training and base generation.
+`code/raw_training/main.py` coordinates Jittor MF32 training and base generation.
 The generated model directory contains the checkpoint, base, and execution
 receipts consumed by `run_fresh_inference.sh`. Both commands validate the
 official archive before processing it.
@@ -165,8 +165,8 @@ occupies 58,167,035 bytes. Both are hash-validated before inference.
 - `code/model.py`: shared Jittor MF32 model and inference.
 - `code/train_model.py`: official-data Jittor training.
 - `code/pipeline/`: full official-data training pipeline that regenerates the frozen base (the from-scratch retraining option).
-- `raw_training/`: training coordinator and base generation.
+- `code/raw_training/`: MF32 residual training coordinator and base generation.
 - `models/`: fixed reproduction assets.
-- `experiments/`: successful reproduction and supplementary-run receipts.
+- `code/experiments/`: successful reproduction and supplementary-run receipts.
 - `AB_CHANGES.md`: A-list to B-list algorithm adaptation.
 - `A_LIST_REFERENCE.md`: accepted A-list reference hashes and shared contract.

@@ -52,13 +52,13 @@ REQUIRED = {
     "run_verify.sh",
     "run_train.sh",
     "run_fresh_inference.sh",
-    "raw_training/README.md",
-    "raw_training/main.py",
-    "raw_training/build_base.py",
-    "raw_training/verify_fresh_run.py",
-    "experiments/locked_reproduction_receipt.json",
-    "experiments/fresh_training_receipt.json",
-    "experiments/fresh_inference_receipt.json",
+    "code/raw_training/README.md",
+    "code/raw_training/main.py",
+    "code/raw_training/build_base.py",
+    "code/raw_training/verify_fresh_run.py",
+    "code/experiments/locked_reproduction_receipt.json",
+    "code/experiments/fresh_training_receipt.json",
+    "code/experiments/fresh_inference_receipt.json",
     "MANIFEST.sha256",
 }
 
@@ -195,7 +195,7 @@ def main() -> int:
         ):
             raise ValueError("quantized checkpoint decode differs")
     source_imports = set().union(*(imports(path) for path in (root / "code").glob("*.py")))
-    raw_training_sources = sorted((root / "raw_training").glob("*.py"))
+    raw_training_sources = sorted((root / "code" / "raw_training").glob("*.py"))
     source_imports.update(*(imports(path) for path in raw_training_sources))
     if "jittor" not in source_imports:
         raise ValueError("Jittor import is absent")
@@ -241,7 +241,7 @@ def main() -> int:
         or "CUDA 12.4" not in metadata.get("cuda_compatibility", "")
     ):
         raise ValueError("submission metadata environment or data declaration differs")
-    raw_readme = (root / "raw_training/README.md").read_text(encoding="utf-8")
+    raw_readme = (root / "code/raw_training/README.md").read_text(encoding="utf-8")
     if (
         "base_result.zip" not in raw_readme
         or "byte-for-byte reproduction" not in raw_readme
@@ -249,7 +249,7 @@ def main() -> int:
     ):
         raise ValueError("raw-training reproduction boundary is undocumented")
     fresh_launcher = (root / "run_fresh_inference.sh").read_text(encoding="utf-8")
-    if "raw_training/build_base.py" not in fresh_launcher or "--data \"$DATA\"" not in fresh_launcher:
+    if "code/raw_training/build_base.py" not in fresh_launcher or "--data \"$DATA\"" not in fresh_launcher:
         raise ValueError("fresh inference does not rebuild its official-data base")
     fresh_sources = "\n".join(
         path.read_text(encoding="utf-8")
@@ -264,12 +264,12 @@ def main() -> int:
     reference = (root / "A_LIST_REFERENCE.md").read_text(encoding="utf-8")
     if A_REFERENCE_SHA256 not in reference:
         raise ValueError("A-list reference is incomplete")
-    locked = json.loads((root / "experiments/locked_reproduction_receipt.json").read_text(encoding="utf-8"))
+    locked = json.loads((root / "code/experiments/locked_reproduction_receipt.json").read_text(encoding="utf-8"))
     fresh_training = json.loads(
-        (root / "experiments/fresh_training_receipt.json").read_text(encoding="utf-8")
+        (root / "code/experiments/fresh_training_receipt.json").read_text(encoding="utf-8")
     )
     fresh_inference = json.loads(
-        (root / "experiments/fresh_inference_receipt.json").read_text(encoding="utf-8")
+        (root / "code/experiments/fresh_inference_receipt.json").read_text(encoding="utf-8")
     )
     if (
         locked.get("decision") != "PASS"
