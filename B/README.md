@@ -43,13 +43,13 @@ it matches the recorded online result.
 
 ## Frozen base generation
 
-`run_verify.sh` reranks a retained frozen base; `generation/` reconstructs that
-base from the official data, so the full `official data -> trained base scores
--> frozen_base.ckpt -> submission` chain is reproducible rather than implicit:
+`generation/` reconstructs the frozen base from the official data, so the full
+`official data -> trained base scores -> frozen_base.ckpt -> submission` chain
+is reproducible end to end rather than starting from a fixed base:
 
 ```text
 official data_B.zip
-  -> generation/reproduce_third_1.py   train every D3/D4 component -> result.zip
+  -> generation/reproduce.py           end-to-end D3/D4 training -> result.zip
   -> generation/pack_frozen_base.py    score matrices -> frozen_base.ckpt
   -> code/build_submission.py          frozen base + MF32 residual -> submission
 ```
@@ -57,16 +57,15 @@ official data_B.zip
 ```bash
 python code/main.py generate-base --data /path/to/data_B.zip \
   --output /data1/b-frozen-base --gpu 0
-python generation/pack_frozen_base.py --self-test   # codec inverse proof, no GPU
 ```
 
 `pack_frozen_base.py` is the exact inverse of the `code/build_submission.py`
 decoders (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). The regenerated
-base is an **approximate** reconstruction: some historical stacker checkpoints
-are not shipped, and Jittor's CUDA operators perturb low-order score bits per
-machine, so it need not match the locked base byte-for-byte. Byte-for-byte
-reproduction of the recorded submission stays with `run_verify.sh` and the
-retained locked base. See `generation/README.md` for details.
+base is an algorithm reproduction, not a byte-for-byte copy: some historical
+checkpoints were not individually preserved and Jittor's CUDA operators drift
+per machine, so a byte-identical base is not expected -- the A-list package
+states the same boundary. The goal is a complete, self-contained training and
+inference chain. See `generation/README.md` for details.
 
 ## Recorded hashes
 

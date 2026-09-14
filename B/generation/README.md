@@ -10,17 +10,21 @@ half that produces the base itself, closing the `official data -> base scores
 
 ```text
 official data_B.zip
-  -> reproduce_third_1.py    train every D3/D4 component from scratch -> result.zip
+  -> reproduce.py            end-to-end D3/D4 training from scratch -> result.zip
   -> pack_frozen_base.py     score matrices -> frozen_base.ckpt (D3 q35+lzma, D4 q7)
   -> code/build_submission.py  frozen base + MF32 residual -> result.zip
 ```
 
-`reproduce_third_1.py` drives the full training pipeline: it rebuilds the ruc4
+`reproduce.py` is the self-contained, weight-free end-to-end entry (the
+`d3d4_official_reproduce_v2` pipeline). It audits the source tree, checks the
+Jittor CUDA linkage, then runs `reproduce_third_1.py`, which rebuilds the ruc4
 candidate base (via the nested `reproduce_ruc4 -> c6 -> c5 -> c3 -> c2_source`
-chain), trains the temporal, implicit-MF, transition-MF and pair-new rankers,
-fits the multi-model ensemble, builds the hierarchy/neighbour meta features,
-trains the meta ranker with Jittor, and writes the base score matrices to
-`result.zip`. No pretrained weights, external data, or answer files are used.
+chain), trains the temporal, transition-MF, pair-new and 512-dimensional
+implicit-MF experts, fits the multi-model ensemble, builds the
+hierarchy/neighbour meta features, trains the Jittor candidate-set fusion
+model, and writes the base score matrices to `result.zip`. Supervision is only
+`dataset3/train.csv` and `dataset4/train.csv`; no pretrained weights, external
+data, answer files, or the frozen base itself are read.
 
 `pack_frozen_base.py` is the encoder that was missing from the package. It is
 the exact inverse of the decoders in `code/build_submission.py`:
@@ -44,8 +48,6 @@ bash run_generate_base.sh /path/to/data_B.zip /data1/b-frozen-base 0
 python generation/generate_frozen_base.py --data /path/to/data_B.zip \
   --work-dir /data1/b-frozen-smoke --quick
 
-# prove the codec is the exact inverse of the consumer (no GPU/data needed)
-python generation/pack_frozen_base.py --self-test
 ```
 
 The work directory must not already exist. The generated base and a
@@ -57,22 +59,24 @@ bash run_inference.sh /path/to/data_B.zip /data1/b-output 0   # after copying th
                                                               # base to models/
 ```
 
-## Approximate reconstruction
+## Reproduction boundary (byte-exact not expected)
 
-The regenerated frozen base is **not** guaranteed to match the recorded locked
-base byte-for-byte, for two reasons:
+This directory delivers the complete `official data -> submission` chain. It is
+an algorithm reproduction, not a byte-for-byte copy of the recorded submission,
+for two reasons:
 
-1. **Missing historical checkpoints.** The recorded base drew on stacker and
-   pair-new checkpoints that are not shipped; the pipeline retrains equivalents
-   rather than restoring the exact historical arrays, so the score matrices
-   differ slightly.
-2. **Jittor operator perturbation.** Jittor's CUDA kernels are not bit-identical
-   across machines and driver/toolkit versions, so low-order bits of the scores
-   drift from run to run. Rank order is stable; exact bytes are not.
+1. **Missing historical checkpoints.** The original base drew on stacker and
+   pair-new checkpoints that were not individually preserved; the pipeline
+   retrains equivalents rather than restoring the exact historical arrays.
+2. **Jittor operator drift.** Jittor's CUDA kernels are not bit-identical across
+   machines and driver/toolkit versions, so low-order score bits vary per run.
 
-Byte-for-byte reproduction of the recorded online submission therefore remains
-the job of `run_verify.sh`, which consumes the retained locked base. This
-directory documents and reproduces the *method* that produces such a base.
+Not reaching a byte-identical base is therefore expected -- the A-list package
+states the same boundary for the same reasons. The goal of this directory is to
+complete and document the training-and-inference method, so the chain is
+reproducible end to end from the official data alone. Any local check of a
+regenerated base against a retained one is a private diagnostic and is not part
+of this repository.
 
 ## Environment
 
