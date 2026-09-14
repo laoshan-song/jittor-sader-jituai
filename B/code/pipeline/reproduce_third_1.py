@@ -92,14 +92,15 @@ def main() -> int:
     parser.add_argument("--mf-negative-count", type=int, default=64)
     parser.add_argument("--mf-epochs", type=int, default=3)
     parser.add_argument("--quick", action="store_true", help="compile/Jittor smoke only; not submittable")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     args.data = args.data.resolve()
     work = args.work_dir.resolve()
     if sha256(args.data) != DATA_SHA256:
         raise ValueError("official data_B.zip SHA-256 differs")
-    if work.exists():
+    if work.exists() and not args.resume:
         raise FileExistsError(f"refusing work-directory reuse: {work}")
-    work.mkdir(parents=True)
+    work.mkdir(parents=True, exist_ok=args.resume)
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("--gpus must contain at least one id")
@@ -122,24 +123,29 @@ def main() -> int:
     cache = work / "cache"
 
     ruc4_work = work / "ruc4_base"
-    run(
-        [
-            sys.executable,
-            str(ROOT / "reproduce_ruc4.py"),
-            "--data",
-            str(args.data),
-            "--work-dir",
-            str(ruc4_work),
-            "--gpus",
-            args.gpus,
-            *(["--jittor-home", str(args.jittor_home.resolve())] if args.jittor_home else []),
-            *(["--cuda-home", str(args.cuda_home.resolve())] if args.cuda_home else []),
-        ],
-        ROOT,
-        env,
-        logs / "01_reproduce_ruc4.log",
-    )
     ruc4_zip = ruc4_work / "ruc4.zip"
+    ruc4_command = [
+        sys.executable,
+        str(ROOT / "reproduce_ruc4.py"),
+        "--data",
+        str(args.data),
+        "--work-dir",
+        str(ruc4_work),
+        "--gpus",
+        args.gpus,
+        *(["--jittor-home", str(args.jittor_home.resolve())] if args.jittor_home else []),
+        *(["--cuda-home", str(args.cuda_home.resolve())] if args.cuda_home else []),
+    ]
+    if args.resume:
+        ruc4_command.append("--resume")
+    ruc4_log = logs / "01_reproduce_ruc4.log"
+    if args.resume and ruc4_zip.is_file() and (ruc4_work / "REPRODUCTION_RECEIPT.json").is_file():
+        print("SKIP", ruc4_zip, flush=True)
+    else:
+        if args.resume:
+            ruc4_log.unlink(missing_ok=True)
+        run(ruc4_command, ROOT, env, ruc4_log)
+
     train_cache = cache / "b_rank_data" / f"dataset4-{DATA_SHA256[:20]}"
 
     deploy_history = work / "deploy_history"

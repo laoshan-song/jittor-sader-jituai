@@ -340,6 +340,7 @@ def main() -> int:
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     args.data = args.data.resolve()
     work = args.work_dir.resolve()
@@ -349,9 +350,9 @@ def main() -> int:
     if sha256(args.data) != DATA_SHA256:
         raise ValueError("official data_B.zip hash differs")
     check_jittor_offline_guards()
-    if work.exists():
+    if work.exists() and not args.resume:
         raise FileExistsError(f"refusing work-directory reuse: {work}")
-    work.mkdir(parents=True)
+    work.mkdir(parents=True, exist_ok=args.resume)
     env = runtime_env(args, work, gpus[0])
     if args.quick:
         quick_check(args, work, env)
@@ -366,9 +367,17 @@ def main() -> int:
         c6_command += ["--jittor-home", str(args.jittor_home.resolve())]
     if args.cuda_home:
         c6_command += ["--cuda-home", str(args.cuda_home.resolve())]
-    run(c6_command, ROOT, env, work / "logs" / "reproduce_c6.log")
-
     c6_zip = c6_work / "b_rank_d34_c6_d3_c5_tie_group.zip"
+    if args.resume:
+        c6_command.append("--resume")
+    c6_log = work / "logs" / "reproduce_c6.log"
+    if args.resume and c6_zip.is_file() and (c6_work / "REPRODUCTION_RECEIPT.json").is_file():
+        print("SKIP", c6_zip, flush=True)
+    else:
+        if args.resume:
+            c6_log.unlink(missing_ok=True)
+        run(c6_command, ROOT, env, c6_log)
+
     c2_work = c6_work / "c5" / "prerequisite" / "c2"
     ensemble = c2_work / "reports" / "dataset3_ensemble.json"
     d3_models, d3_reports, direct_audit, duplicate_audit = build_d3_assets(

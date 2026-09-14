@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,34 @@ def run(command: list[str], cwd: Path, env: dict[str, str], log: Path) -> None:
     with log.open("x", encoding="utf-8") as handle:
         subprocess.run(command, cwd=cwd, env=env, stdout=handle,
                        stderr=subprocess.STDOUT, check=True)
+
+
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def run_stage(
+    *,
+    resume: bool,
+    expected: tuple[Path, ...],
+    cleanup: tuple[Path, ...],
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    log: Path,
+) -> bool:
+    if resume and all(path.exists() for path in expected):
+        print("SKIP", " ".join(str(path) for path in expected), flush=True)
+        return False
+    if resume:
+        for path in cleanup:
+            remove_path(path)
+        log.unlink(missing_ok=True)
+    run(command, cwd, env, log)
+    return True
 
 
 def env_for(
@@ -108,14 +137,15 @@ def main() -> int:
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
     parser.add_argument("--quick", action="store_true", help="small smoke; not score-authorized")
+    parser.add_argument("--resume", action="store_true", help="reuse completed stage artifacts")
     args = parser.parse_args()
     data = args.data.resolve()
     work = args.work_dir.resolve()
     if sha256(data) != DATA_SHA256:
         raise ValueError("official data_B.zip hash differs")
-    if work.exists():
+    if work.exists() and not args.resume:
         raise FileExistsError(f"refusing work-directory reuse: {work}")
-    work.mkdir(parents=True)
+    work.mkdir(parents=True, exist_ok=args.resume)
     logs = work / "logs"
     models = work / "models"
     reports = work / "reports"
@@ -124,19 +154,38 @@ def main() -> int:
     aenv = env_for(work / "runtime" / "d3", args.gpu, jittor_home, cuda_home)
     denv = env_for(work / "runtime" / "d4", args.gpu, jittor_home, cuda_home)
 
-    # D3 control is trained from official data, then exposed as a source ZIP for D4.
-    train_grid(data, "dataset3", models / "dataset3", args.quick, aenv, logs)
     d3_report = reports / "dataset3_ensemble.json"
-    command = [sys.executable, "fit_ensemble.py", "--data", str(data), "--scene", "dataset3",
-               "--models", *map(str, d3_models(models / "dataset3")), "--output", str(d3_report)]
-    if args.quick:
-        command.extend(["--meta-groups", "128", "--valid-groups", "128", "--confirm-groups", "128", "--batch", "32"])
-    run(command, A_CODE, aenv, logs / "fit_dataset3.log")
     d3_source = work / "dataset3_source.zip"
     d3_manifest = work / "dataset3_source.manifest.json"
-    run([sys.executable, str(ROOT / "code" / "infer_d3_source.py"), "--data", str(data),
-         "--report", str(d3_report), "--output", str(d3_source), "--manifest", str(d3_manifest)],
-        ROOT, aenv, logs / "infer_dataset3.log")
+    if not (
+        args.resume
+        and d3_report.is_file()
+        and d3_source.is_file()
+        and d3_manifest.is_file()
+    ):
+        if args.resume:
+            for path in (
+                models / "dataset3",
+                d3_report,
+                d3_source,
+                d3_manifest,
+                logs / "train_dataset3.log",
+                logs / "fit_dataset3.log",
+                logs / "infer_dataset3.log",
+            ):
+                remove_path(path)
+        # D3 control is trained from official data, then exposed as a source ZIP for D4.
+        train_grid(data, "dataset3", models / "dataset3", args.quick, aenv, logs)
+        command = [sys.executable, "fit_ensemble.py", "--data", str(data), "--scene", "dataset3",
+                   "--models", *map(str, d3_models(models / "dataset3")), "--output", str(d3_report)]
+        if args.quick:
+            command.extend(["--meta-groups", "128", "--valid-groups", "128", "--confirm-groups", "128", "--batch", "32"])
+        run(command, A_CODE, aenv, logs / "fit_dataset3.log")
+        run([sys.executable, str(ROOT / "code" / "infer_d3_source.py"), "--data", str(data),
+             "--report", str(d3_report), "--output", str(d3_source), "--manifest", str(d3_manifest)],
+            ROOT, aenv, logs / "infer_dataset3.log")
+    else:
+        print("SKIP completed Dataset3 stages", flush=True)
 
     # D4 causal temporal, test-pool temporal, MF and transition members.
     common = ["--data", str(data), "--cache-dir", str(work / "cache")]
@@ -145,19 +194,39 @@ def main() -> int:
     for seed in (20260810, 20260811, 20260812):
         mf.append(work / f"d4_mf_{seed}")
     transition = work / "d4_transition"
-    run([sys.executable, "-m", "b_rank.d4_temporal_deploy", *common, "--run-dir", str(h32),
-         "--temporal", "temporal_h32_seed10", "32", "20260810", "--temporal", "temporal_h32_seed11", "32", "20260811", "--temporal", "temporal_h32_seed12", "32", "20260812",
-         "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"], CODE, denv, logs / "deploy_h32.log")
-    run([sys.executable, "-m", "b_rank.d4_temporal_deploy", *common, "--run-dir", str(h64),
-         "--temporal", "temporal_h64_seed10", "64", "20260810", "--temporal", "temporal_h64_seed11", "64", "20260811", "--temporal", "temporal_h64_seed12", "64", "20260812",
-         "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"], CODE, denv, logs / "deploy_h64.log")
-    run([sys.executable, "-m", "b_rank.d4_testpool_temporal_deploy", *common, "--run-dir", str(pool), "--seeds", "20260810", "20260811", "20260812",
-         "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"], CODE, denv, logs / "deploy_testpool.log")
+    run_stage(
+        resume=args.resume, expected=(h32 / "deploy_report.json",), cleanup=(h32,),
+        command=[sys.executable, "-m", "b_rank.d4_temporal_deploy", *common, "--run-dir", str(h32),
+                 "--temporal", "temporal_h32_seed10", "32", "20260810", "--temporal", "temporal_h32_seed11", "32", "20260811", "--temporal", "temporal_h32_seed12", "32", "20260812",
+                 "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"],
+        cwd=CODE, env=denv, log=logs / "deploy_h32.log",
+    )
+    run_stage(
+        resume=args.resume, expected=(h64 / "deploy_report.json",), cleanup=(h64,),
+        command=[sys.executable, "-m", "b_rank.d4_temporal_deploy", *common, "--run-dir", str(h64),
+                 "--temporal", "temporal_h64_seed10", "64", "20260810", "--temporal", "temporal_h64_seed11", "64", "20260811", "--temporal", "temporal_h64_seed12", "64", "20260812",
+                 "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"],
+        cwd=CODE, env=denv, log=logs / "deploy_h64.log",
+    )
+    run_stage(
+        resume=args.resume, expected=(pool / "deploy_report.json",), cleanup=(pool,),
+        command=[sys.executable, "-m", "b_rank.d4_testpool_temporal_deploy", *common, "--run-dir", str(pool), "--seeds", "20260810", "20260811", "20260812",
+                 "--epochs", "1" if args.quick else "5", "--batch-rows", "64" if args.quick else "256"],
+        cwd=CODE, env=denv, log=logs / "deploy_testpool.log",
+    )
     for seed, destination in zip((20260810, 20260811, 20260812), mf):
-        run([sys.executable, "-m", "b_rank.d4_implicit_mf_deploy", *common, "--run-dir", str(destination), "--seed", str(seed),
-             "--epochs", "1" if args.quick else "3", "--batch-rows", "512" if args.quick else "4096"], CODE, denv, logs / f"deploy_mf_{seed}.log")
-    run([sys.executable, "-m", "b_rank.d4_transition_mf_deploy", *common, "--run-dir", str(transition),
-         "--epochs", "1" if args.quick else "3", "--batch-rows", "512" if args.quick else "4096"], CODE, denv, logs / "deploy_transition.log")
+        run_stage(
+            resume=args.resume, expected=(destination / "deploy_report.json",), cleanup=(destination,),
+            command=[sys.executable, "-m", "b_rank.d4_implicit_mf_deploy", *common, "--run-dir", str(destination), "--seed", str(seed),
+                     "--epochs", "1" if args.quick else "3", "--batch-rows", "512" if args.quick else "4096"],
+            cwd=CODE, env=denv, log=logs / f"deploy_mf_{seed}.log",
+        )
+    run_stage(
+        resume=args.resume, expected=(transition / "deploy_report.json",), cleanup=(transition,),
+        command=[sys.executable, "-m", "b_rank.d4_transition_mf_deploy", *common, "--run-dir", str(transition),
+                 "--epochs", "1" if args.quick else "3", "--batch-rows", "512" if args.quick else "4096"],
+        cwd=CODE, env=denv, log=logs / "deploy_transition.log",
+    )
 
     h32r, h64r, poolr = h32 / "deploy_report.json", h64 / "deploy_report.json", pool / "deploy_report.json"
     fit_common = [sys.executable, "-m", "b_rank.d4_multimodel_fit", *common]
@@ -169,8 +238,13 @@ def main() -> int:
     fit_common += ["--transition-mf", "transition_mf_seed12", checkpoint_path(transition / "deploy_report.json"),
                    "--valid-groups", "256" if args.quick else "60000", "--confirm-groups", "256" if args.quick else "30000",
                    "--batch-rows", "64" if args.quick else "512"]
-    run(fit_common + ["--run-dir", str(work / "d4_control")], CODE, denv, logs / "fit_d4_control.log")
-    control_report = work / "d4_control" / "research_report.json"
+    control_dir = work / "d4_control"
+    control_report = control_dir / "research_report.json"
+    run_stage(
+        resume=args.resume, expected=(control_report,), cleanup=(control_dir,),
+        command=fit_common + ["--run-dir", str(control_dir)],
+        cwd=CODE, env=denv, log=logs / "fit_d4_control.log",
+    )
     pair_common = fit_common + ["--pairnew-transformer", "--control-fit", str(control_report), "--residual-train-rows", "128" if args.quick else "20000", "--residual-epochs", "1" if args.quick else "6", "--residual-batch-rows", "64" if args.quick else "128", "--run-dir", str(work / "d4_pairnew")]
     if not args.quick:
         for hidden, seed in (
@@ -178,8 +252,11 @@ def main() -> int:
             (96, 20260818), (96, 20260819), (96, 20260820),
         ):
             pair_common += ["--residual-member", str(hidden), str(seed)]
-    run(pair_common, CODE, denv, logs / "fit_d4_pairnew.log")
     pair_report = work / "d4_pairnew" / "research_report.json"
+    run_stage(
+        resume=args.resume, expected=(pair_report,), cleanup=(work / "d4_pairnew",),
+        command=pair_common, cwd=CODE, env=denv, log=logs / "fit_d4_pairnew.log",
+    )
 
     infer = [sys.executable, "-m", "b_rank.d4_multimodel_infer", *common, "--fit-report", str(control_report), "--pairnew-report", str(pair_report), "--dataset3-source", str(d3_source), "--dataset3-manifest", str(d3_manifest), "--output", str(work / "control_v26.zip"), "--predict-batch-rows", "64" if args.quick else "512"]
     for report in (h32r, h64r, poolr): infer += ["--temporal-report", str(report)]
@@ -187,17 +264,34 @@ def main() -> int:
         seed = path.name.removeprefix("d4_mf_")
         infer += ["--mf-report", f"fullhistory_mf_seed{seed}", str(path / "deploy_report.json")]
     infer += ["--transition-mf-report", "transition_mf_seed12", str(transition / "deploy_report.json")]
-    run(infer, CODE, denv, logs / "infer_d4_control.log")
+    control_output = work / "control_v26.zip"
+    control_manifest = control_output.with_suffix(".manifest.json")
+    run_stage(
+        resume=args.resume, expected=(control_output, control_manifest),
+        cleanup=(control_output, control_manifest),
+        command=infer, cwd=CODE, env=denv, log=logs / "infer_d4_control.log",
+    )
 
     residual = reports / "d3_residual_v26.json"
-    residual.write_text(json.dumps({"kind": "d3_same_time_cross_source_residual_v26", "decision": "PASS", "policy": {"gate": "all", "weight": 0.10}}, indent=2, sort_keys=True) + "\n")
+    if not residual.is_file():
+        residual.parent.mkdir(parents=True, exist_ok=True)
+        residual.write_text(json.dumps({"kind": "d3_same_time_cross_source_residual_v26", "decision": "PASS", "policy": {"gate": "all", "weight": 0.10}}, indent=2, sort_keys=True) + "\n")
     v26_base = work / "v26_base.zip"
-    run([sys.executable, "d3_cross_source_v26.py", "build", "--data", str(data), "--base", str(work / "control_v26.zip"), "--base-manifest", str(work / "control_v26.manifest.json"), "--report", str(residual), "--output", str(v26_base)], A_CODE, aenv, logs / "build_v26.log")
-    run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(v26_base)], ROOT, aenv, logs / "verify_v26.log")
+    v26_manifest = v26_base.with_suffix(".manifest.json")
+    built_v26 = run_stage(
+        resume=args.resume, expected=(v26_base, v26_manifest),
+        cleanup=(v26_base, v26_manifest),
+        command=[sys.executable, "d3_cross_source_v26.py", "build", "--data", str(data), "--base", str(work / "control_v26.zip"), "--base-manifest", str(work / "control_v26.manifest.json"), "--report", str(residual), "--output", str(v26_base)],
+        cwd=A_CODE, env=aenv, log=logs / "build_v26.log",
+    )
+    if built_v26:
+        (logs / "verify_v26.log").unlink(missing_ok=True)
+        run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(v26_base)], ROOT, aenv, logs / "verify_v26.log")
 
     gate = reports / "c2_source_session_gate.json"
-    run(
-        [
+    run_stage(
+        resume=args.resume, expected=(gate,), cleanup=(gate,),
+        command=[
             sys.executable,
             "d3_near_time_gate.py",
             "--data",
@@ -217,13 +311,19 @@ def main() -> int:
             "--output",
             str(gate),
         ],
-        C2_CODE,
-        aenv,
-        logs / "gate_c2.log",
+        cwd=C2_CODE, env=aenv, log=logs / "gate_c2.log",
     )
     final = work / "b_rank_d34_c2_source_session.zip"
-    run([sys.executable, "build_c2_source_session.py", "--data", str(data), "--base", str(v26_base), "--base-manifest", str(v26_base.with_suffix(".manifest.json")), "--gate-report", str(gate), "--output", str(final)], C2_CODE, aenv, logs / "build_c2.log")
-    run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(final)], ROOT, aenv, logs / "verify_c2.log")
+    final_manifest = final.with_suffix(".manifest.json")
+    built_final = run_stage(
+        resume=args.resume, expected=(final, final_manifest),
+        cleanup=(final, final_manifest),
+        command=[sys.executable, "build_c2_source_session.py", "--data", str(data), "--base", str(v26_base), "--base-manifest", str(v26_base.with_suffix(".manifest.json")), "--gate-report", str(gate), "--output", str(final)],
+        cwd=C2_CODE, env=aenv, log=logs / "build_c2.log",
+    )
+    if built_final:
+        (logs / "verify_c2.log").unlink(missing_ok=True)
+        run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(final)], ROOT, aenv, logs / "verify_c2.log")
     receipt = {"kind": "b_rank_d34_c2_reproduction_receipt_v1", "decision": "SMOKE_ONLY" if args.quick else "PASS", "data_sha256": DATA_SHA256, "submission_sha256": sha256(final), "quick": bool(args.quick), "d3_policy": json.loads(gate.read_text())["fixed_policy"], "d4_control_report": str(control_report), "d4_pairnew_report": str(pair_report), "gate_report": str(gate)}
     (work / "REPRODUCTION_RECEIPT.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(json.dumps(receipt, indent=2, sort_keys=True))

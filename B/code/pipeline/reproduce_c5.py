@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +55,33 @@ def run(command: list[str], cwd: Path, env: dict[str, str], log: Path) -> None:
         )
 
 
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def run_stage(
+    resume: bool,
+    expected: tuple[Path, ...],
+    cleanup: tuple[Path, ...],
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    log: Path,
+) -> bool:
+    if resume and all(path.exists() for path in expected):
+        print("SKIP", " ".join(str(path) for path in expected), flush=True)
+        return False
+    if resume:
+        for path in cleanup:
+            remove_path(path)
+        log.unlink(missing_ok=True)
+    run(command, cwd, env, log)
+    return True
+
+
 def same_policy(actual: dict) -> bool:
     if actual.get("gate") != EXPECTED_C3_POLICY["gate"]:
         return False
@@ -72,14 +100,15 @@ def main() -> int:
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
     parser.add_argument("--quick", action="store_true", help="small smoke; not score-authorized")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     data = args.data.resolve()
     work = args.work_dir.resolve()
     if sha256(data) != DATA_SHA256:
         raise ValueError("official data_B.zip hash differs")
-    if work.exists():
+    if work.exists() and not args.resume:
         raise FileExistsError(f"refusing work-directory reuse: {work}")
-    work.mkdir(parents=True)
+    work.mkdir(parents=True, exist_ok=args.resume)
     prerequisite = work / "prerequisite"
     c5_work = work / "c5"
     logs = work / "logs"
@@ -132,10 +161,20 @@ def main() -> int:
         c3_args += ["--cuda-home", str(args.cuda_home.resolve())]
     if args.quick:
         c3_args += ["--quick"]
-    run(c3_args, ROOT, env, logs / "reproduce_c3.log")
-
     c3_zip = prerequisite / "c3" / "b_rank_d34_c3_multiscale.zip"
     c3_manifest = c3_zip.with_suffix(".manifest.json")
+    if args.resume:
+        c3_args.append("--resume")
+    run_stage(
+        args.resume,
+        (c3_zip, c3_manifest, prerequisite / "REPRODUCTION_RECEIPT.json"),
+        (),
+        c3_args,
+        ROOT,
+        env,
+        logs / "reproduce_c3.log",
+    )
+
     ensemble = prerequisite / "c2" / "reports" / "dataset3_ensemble.json"
     gate = c5_work / "d3_session_ring_gate.json"
     gate_args = [
@@ -156,7 +195,10 @@ def main() -> int:
         "--output",
         str(gate),
     ]
-    run(gate_args, C5_CODE, env, logs / "gate_c5.log")
+    run_stage(
+        args.resume, (gate,), (gate,), gate_args,
+        C5_CODE, env, logs / "gate_c5.log",
+    )
 
     output = work / "b_rank_d34_c5_d3_session_ring.zip"
     build_args = [
@@ -175,13 +217,19 @@ def main() -> int:
         "--output",
         str(output),
     ]
-    run(build_args, C5_CODE, env, logs / "build_c5.log")
-    run(
-        [sys.executable, str(VERIFY), "--data", str(data), "--submission", str(output)],
-        C2_ROOT,
-        env,
-        logs / "verify_c5.log",
+    output_manifest = output.with_suffix(".manifest.json")
+    built_output = run_stage(
+        args.resume, (output, output_manifest), (output, output_manifest),
+        build_args, C5_CODE, env, logs / "build_c5.log",
     )
+    if built_output:
+        (logs / "verify_c5.log").unlink(missing_ok=True)
+        run(
+            [sys.executable, str(VERIFY), "--data", str(data), "--submission", str(output)],
+            C2_ROOT,
+            env,
+            logs / "verify_c5.log",
+        )
 
     receipt = {
         "kind": "b_rank_d34_c5_end_to_end_reproduction_receipt_v1",
