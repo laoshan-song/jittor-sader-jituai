@@ -3,7 +3,7 @@
 # Usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GEN="$ROOT/generation"
+GEN="$ROOT/code/pipeline"
 PYTHON="${PYTHON:-python3}"
 DATA="${1:?usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]}"
 WORK="${2:?usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]}"

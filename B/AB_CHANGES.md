@@ -8,7 +8,7 @@ serialization.
 | Contract | A list | B list adaptation |
 | --- | --- | --- |
 | Fixed base member | retained `base_result.zip` | compact retained base checkpoint |
-| Base origin | official-data raw training | official-data full pipeline in `generation/` |
+| Base origin | official-data raw training | official-data full pipeline in `code/pipeline/` |
 | Jittor model | BPR32 candidate signal | MF32 source-candidate signal |
 | Candidate processing | bounded candidate-local residual | bounded candidate-local residual |
 | Data organization | A-list entity tables and batches | expanded entity tables and streaming batches |
@@ -23,10 +23,10 @@ serialization stages.
 
 ## Frozen base generation
 
-The retained frozen base is no longer opaque: `generation/` reconstructs it
-from the official data. `generation/reproduce_third_1.py` trains every
+The retained frozen base is no longer opaque: `code/pipeline/` reconstructs it
+from the official data. `code/pipeline/reproduce_third_1.py` trains every
 Dataset3/Dataset4 component from scratch and emits the base score matrices, and
-`generation/pack_frozen_base.py` — the exact inverse of the
+`code/pipeline/pack_frozen_base.py` — the exact inverse of the
 `code/build_submission.py` decoders — packs them into `frozen_base.ckpt`
 (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). This makes the base an
 end-to-end product of official data rather than a fixed input.

@@ -43,14 +43,14 @@ it matches the recorded online result.
 
 ## Frozen base generation
 
-`generation/` reconstructs the frozen base from the official data, so the full
+`code/pipeline/` reconstructs the frozen base from the official data, so the full
 `official data -> trained base scores -> frozen_base.ckpt -> submission` chain
 is reproducible end to end rather than starting from a fixed base:
 
 ```text
 official data_B.zip
-  -> generation/reproduce.py           end-to-end D3/D4 training -> result.zip
-  -> generation/pack_frozen_base.py    score matrices -> frozen_base.ckpt
+  -> code/pipeline/reproduce.py           end-to-end D3/D4 training -> result.zip
+  -> code/pipeline/pack_frozen_base.py    score matrices -> frozen_base.ckpt
   -> code/build_submission.py          frozen base + MF32 residual -> submission
 ```
 
@@ -60,10 +60,10 @@ python code/main.py generate-base --data /path/to/data_B.zip \
 ```
 
 `pack_frozen_base.py` is the exact inverse of the `code/build_submission.py`
-decoders (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). `generation/`
+decoders (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). `code/pipeline/`
 supplies the frozen-base generation chain from the official data alone, so the
 recorded top submission is reproducible from data rather than from a fixed
-base. See `generation/README.md` for details.
+base. See `code/pipeline/README.md` for details.
 
 ## Recorded hashes
 
@@ -164,6 +164,7 @@ occupies 58,167,035 bytes. Both are hash-validated before inference.
 - `code/build_submission.py`: deterministic result construction.
 - `code/model.py`: shared Jittor MF32 model and inference.
 - `code/train_model.py`: official-data Jittor training.
+- `code/pipeline/`: full official-data training pipeline that regenerates the frozen base (the from-scratch retraining option).
 - `raw_training/`: training coordinator and base generation.
 - `models/`: fixed reproduction assets.
 - `experiments/`: successful reproduction and supplementary-run receipts.

@@ -45,7 +45,7 @@ python code/main.py generate-base --data /path/to/data_B.zip \
 bash run_generate_base.sh /path/to/data_B.zip /data1/b-frozen-base 0
 
 # compile-only smoke test (no base produced)
-python generation/generate_frozen_base.py --data /path/to/data_B.zip \
+python code/pipeline/generate_frozen_base.py --data /path/to/data_B.zip \
   --work-dir /data1/b-frozen-smoke --quick
 
 ```
