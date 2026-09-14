@@ -242,7 +242,7 @@ def main() -> int:
     control_report = control_dir / "research_report.json"
     run_stage(
         resume=args.resume, expected=(control_report,), cleanup=(control_dir,),
-        command=fit_common + ["--run-dir", str(control_dir)],
+        command=fit_common + ["--control-only", "--run-dir", str(control_dir)],
         cwd=CODE, env=denv, log=logs / "fit_d4_control.log",
     )
     pair_common = fit_common + ["--pairnew-transformer", "--control-fit", str(control_report), "--residual-train-rows", "128" if args.quick else "20000", "--residual-epochs", "1" if args.quick else "6", "--residual-batch-rows", "64" if args.quick else "128", "--run-dir", str(work / "d4_pairnew")]

@@ -296,7 +296,7 @@ def main() -> int:
         fit_common += ["--mf", name, checkpoint(report)]
     fit_common += ["--transition-mf", "transition_mf_seed12", checkpoint(transition / "deploy_report.json")]
     run(
-        [*fit_common, "--run-dir", str(control_fit), "--valid-groups", "60000", "--confirm-groups", "30000", "--batch-rows", "512"],
+        [*fit_common, "--control-only", "--run-dir", str(control_fit), "--valid-groups", "60000", "--confirm-groups", "30000", "--batch-rows", "512"],
         CODE,
         env,
         logs / "06_fit_control.log",

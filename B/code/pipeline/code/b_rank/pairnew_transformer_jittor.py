@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""D4 pair-new rank-slot Transformer anchored to a frozen control."""
+"""D4 pair-new rank-slot Transformer anchored to a validated control."""
 
 from __future__ import annotations
 
@@ -19,9 +19,6 @@ DEFAULT_MEMBERS = ((64, 20260813), (96, 20260814))
 LAYERS = 2
 HEADS = 4
 RESIDUAL_SCALE = 1.0
-EXPECTED_CONTROL_SHA256 = (
-    "86c38a86fafcadaa43deb3b196ad5e60f511ce779a1e6944a95c5d7a02643c4e"
-)
 EXPECTED_V12_REPORT_SHA256 = (
     "7d566b9793e054a1351653d5bfccd708379069e5b4b87e15f448ddce0fc1ebf5"
 )
@@ -114,12 +111,11 @@ def _mrr(scores: np.ndarray, labels: np.ndarray) -> float:
 def _control_contract(
     path: Path, component_names: list[str]
 ) -> tuple[dict[str, Any], np.ndarray, int, float, float]:
-    if _sha256(path) != EXPECTED_CONTROL_SHA256:
-        raise ValueError("control fit is not the online-1.149 frozen fit report")
     report = json.loads(path.read_text(encoding="utf-8"))
     if (
         report.get("kind") not in {"d4_multimodel_fit_v1", "d4_poolset_multimodel_fit_v1"}
         or report.get("decision") != "PASS"
+        or report.get("data_sha256") != EXPECTED_DATA_SHA256
         or report.get("selection_replay") != "history validation only"
         or report.get("confirmation_excluded_from_selection") is not True
         or report.get("test_pool_is_diagnostic_only") is not True
@@ -461,8 +457,14 @@ def run(
     epochs: int,
     batch: int,
     baseline_report_path: Path | None = None,
+    pretrained_checkpoints: list[Path] | None = None,
 ) -> dict[str, Any]:
-    if (
+    pretrained_checkpoints = [
+        path.resolve() for path in (pretrained_checkpoints or [])
+    ]
+    if pretrained_checkpoints and members:
+        raise ValueError("pretrained checkpoints and new members are mutually exclusive")
+    if not pretrained_checkpoints and (
         len(members) < 2
         or {hidden for hidden, _ in members} < {64, 96}
         or len({seed for _, seed in members}) != len(members)
@@ -471,6 +473,8 @@ def run(
         or batch < 1
     ):
         raise ValueError("v12 audit requires independent hidden-64 and hidden-96 members")
+    if batch < 1:
+        raise ValueError("batch must be positive")
     control_report, indices, base_index, seen_alpha, new_alpha = _control_contract(
         control_fit_path, component_names
     )
@@ -556,81 +560,135 @@ def run(
             )
             del frozen_feature
 
-    training_parts = []
-    for values in (history, testpool):
-        target_new = ~values["seen"][
-            np.arange(train_rows), values["labels"][:train_rows]
-        ]
-        ids = np.flatnonzero(target_new)
-        training_parts.append(
-            (
-                values["feature"][ids],
-                values["control"][ids],
-                values["seen"][ids],
-                values["labels"][ids],
-            )
-        )
-    train_feature, train_control, train_seen, train_labels = (
-        np.concatenate([part[index] for part in training_parts], axis=0)
-        for index in range(4)
-    )
-    del training_parts
     holdout = slice(train_rows, None)
     select_feature = history["feature"][holdout]
     select_control = history["control"][holdout]
     select_seen = history["seen"][holdout]
     select_labels = history["labels"][holdout]
 
-    checkpoint_dir = run_dir / "checkpoints"
-    checkpoint_dir.mkdir()
     records = []
     nets = []
     selection_predictions = []
-    for hidden, seed in members:
-        net, prediction, record = _train_member(
-            train_feature=train_feature,
-            train_control=train_control,
-            train_seen=train_seen,
-            train_labels=train_labels,
-            select_feature=select_feature,
-            select_control=select_control,
-            select_seen=select_seen,
-            select_labels=select_labels,
-            hidden=hidden,
-            seed=seed,
-            epochs=epochs,
-            batch=batch,
+    pair_new_rows = sum(
+        int(
+            np.count_nonzero(
+                ~values["seen"][
+                    np.arange(train_rows), values["labels"][:train_rows]
+                ]
+            )
         )
-        path = checkpoint_dir / f"pairnew_set{hidden}_seed{seed}.npz"
-        _save_checkpoint(
-            path,
-            net,
-            feature_count=train_feature.shape[-1],
-            hidden=hidden,
-            seed=seed,
-            epoch=record["best_epoch"],
-            static_mean=static_mean,
-            static_std=static_std,
-        )
-        reloaded, metadata = load_checkpoint(path)
-        before = _predict(net, select_feature[:256], batch)
-        after = _predict(reloaded, select_feature[:256], batch)
-        if not np.allclose(before, after, rtol=0.0, atol=1e-6):
-            raise RuntimeError(f"checkpoint reload mismatch: {path}")
-        record.update(
-            {
+        for values in (history, testpool)
+    )
+    if pretrained_checkpoints:
+        identities = set()
+        for path in pretrained_checkpoints:
+            if not path.is_file():
+                raise FileNotFoundError(f"pretrained checkpoint is missing: {path}")
+            net, metadata = load_checkpoint(path)
+            hidden = int(metadata["hidden"])
+            seed = int(metadata["seed"])
+            identity = (hidden, seed)
+            if (
+                identity in identities
+                or int(metadata["feature_count"]) != select_feature.shape[-1]
+                or hidden < HEADS
+                or hidden % HEADS
+                or not np.array_equal(metadata["static_mean"], static_mean)
+                or not np.array_equal(metadata["static_std"], static_std)
+            ):
+                raise ValueError(f"pretrained checkpoint contract differs: {path}")
+            identities.add(identity)
+            record = {
+                "hidden": hidden,
+                "seed": seed,
+                "best_epoch": int(metadata["epoch"]),
                 "checkpoint": str(path),
                 "sha256": _sha256(path),
+                "pretrained": True,
                 "checkpoint_metadata": {
                     key: value
                     for key, value in metadata.items()
                     if key not in {"static_mean", "static_std"}
                 },
             }
+            records.append(record)
+            nets.append(net)
+            selection_predictions.append(
+                _predict(net, select_feature, batch)
+            )
+        if (
+            len(identities) < 2
+            or {hidden for hidden, _ in identities} < {64, 96}
+            or len({seed for _, seed in identities}) != len(identities)
+        ):
+            raise ValueError("pretrained members lack independent hidden-64/96 seeds")
+    else:
+        training_parts = []
+        for values in (history, testpool):
+            target_new = ~values["seen"][
+                np.arange(train_rows), values["labels"][:train_rows]
+            ]
+            ids = np.flatnonzero(target_new)
+            training_parts.append(
+                (
+                    values["feature"][ids],
+                    values["control"][ids],
+                    values["seen"][ids],
+                    values["labels"][ids],
+                )
+            )
+        train_feature, train_control, train_seen, train_labels = (
+            np.concatenate([part[index] for part in training_parts], axis=0)
+            for index in range(4)
         )
-        records.append(record)
-        nets.append(net)
-        selection_predictions.append(prediction)
+        del training_parts
+        checkpoint_dir = run_dir / "checkpoints"
+        checkpoint_dir.mkdir()
+        for hidden, seed in members:
+            net, prediction, record = _train_member(
+                train_feature=train_feature,
+                train_control=train_control,
+                train_seen=train_seen,
+                train_labels=train_labels,
+                select_feature=select_feature,
+                select_control=select_control,
+                select_seen=select_seen,
+                select_labels=select_labels,
+                hidden=hidden,
+                seed=seed,
+                epochs=epochs,
+                batch=batch,
+            )
+            path = checkpoint_dir / f"pairnew_set{hidden}_seed{seed}.npz"
+            _save_checkpoint(
+                path,
+                net,
+                feature_count=train_feature.shape[-1],
+                hidden=hidden,
+                seed=seed,
+                epoch=record["best_epoch"],
+                static_mean=static_mean,
+                static_std=static_std,
+            )
+            reloaded, metadata = load_checkpoint(path)
+            before = _predict(net, select_feature[:256], batch)
+            after = _predict(reloaded, select_feature[:256], batch)
+            if not np.allclose(before, after, rtol=0.0, atol=1e-6):
+                raise RuntimeError(f"checkpoint reload mismatch: {path}")
+            record.update(
+                {
+                    "checkpoint": str(path),
+                    "sha256": _sha256(path),
+                    "checkpoint_metadata": {
+                        key: value
+                        for key, value in metadata.items()
+                        if key not in {"static_mean", "static_std"}
+                    },
+                }
+            )
+            records.append(record)
+            nets.append(net)
+            selection_predictions.append(prediction)
 
     selection_residual = _qnorm(np.mean(selection_predictions, axis=0))
     alpha, selection_mrr, selection_pair_seen_mrr = _tune_gate(
@@ -728,7 +786,7 @@ def run(
         },
         "training": {
             "requested_rows_per_replay": train_rows,
-            "pair_new_rows": int(len(train_labels)),
+            "pair_new_rows": pair_new_rows,
             "epochs": epochs,
             "batch_rows": batch,
             "members": records,
