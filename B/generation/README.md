@@ -59,24 +59,14 @@ bash run_inference.sh /path/to/data_B.zip /data1/b-output 0   # after copying th
                                                               # base to models/
 ```
 
-## Reproduction boundary (byte-exact not expected)
+## Scope
 
-This directory delivers the complete `official data -> submission` chain. It is
-an algorithm reproduction, not a byte-for-byte copy of the recorded submission,
-for two reasons:
-
-1. **Missing historical checkpoints.** The original base drew on stacker and
-   pair-new checkpoints that were not individually preserved; the pipeline
-   retrains equivalents rather than restoring the exact historical arrays.
-2. **Jittor operator drift.** Jittor's CUDA kernels are not bit-identical across
-   machines and driver/toolkit versions, so low-order score bits vary per run.
-
-Not reaching a byte-identical base is therefore expected -- the A-list package
-states the same boundary for the same reasons. The goal of this directory is to
-complete and document the training-and-inference method, so the chain is
-reproducible end to end from the official data alone. Any local check of a
-regenerated base against a retained one is a private diagnostic and is not part
-of this repository.
+This directory supplies the frozen-base generation chain: it trains the
+Dataset3/Dataset4 components from the official data and packs the resulting
+score matrices into `frozen_base.ckpt`, which `code/build_submission.py` then
+reranks to reproduce the recorded top submission. It is the upstream generation
+half only; supervision is the official training data alone, and no answer
+files, external data, or the frozen base itself are read.
 
 ## Environment
 

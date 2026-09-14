@@ -14,7 +14,6 @@ from pathlib import Path
 
 DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
 ONLINE_SHA256 = "693f0635c370ff636ca77a10c3de4dfcb90bf1617f3afc3bd74d5a9b9b36600a"
-ONLINE_SCORE = 1.3744943343797287
 ROOT = Path(__file__).resolve().parent
 CODE = ROOT / "code"
 B_RANK = CODE / "b_rank"
@@ -576,7 +575,6 @@ def main() -> int:
         "data_sha256": DATA_SHA256,
         "submission_sha256": sha256(output),
         "online_reference_sha256": ONLINE_SHA256,
-        "online_reference_score": ONLINE_SCORE,
         "exact_online_sha256": sha256(output) == ONLINE_SHA256,
         "neural_framework": "Jittor",
         "weights_in_package": False,

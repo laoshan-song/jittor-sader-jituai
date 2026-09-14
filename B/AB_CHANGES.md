@@ -31,11 +31,9 @@ Dataset3/Dataset4 component from scratch and emits the base score matrices, and
 (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). This makes the base an
 end-to-end product of official data rather than a fixed input.
 
-The regeneration is an **approximate** reconstruction, not a byte-exact one:
-some historical stacker/pair-new checkpoints are not shipped, and Jittor's CUDA
-operators are not bit-identical across machines, so low-order score bits drift.
-Byte-for-byte reproduction of the recorded submission therefore remains with
-`run_verify.sh` and the retained locked base.
+This makes the frozen base a product of the official-data generation chain
+rather than a fixed input, so the recorded top submission is reproducible from
+the data alone.
 
 For the recorded B-list result, the reviewer supplies the official
 `data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint

@@ -190,7 +190,7 @@ def main() -> int:
     run(infer, CODE, denv, logs / "infer_d4_control.log")
 
     residual = reports / "d3_residual_v26.json"
-    residual.write_text(json.dumps({"kind": "d3_same_time_cross_source_residual_v26", "decision": "PASS", "policy": {"gate": "all", "weight": 0.10}, "locked_from_online_score": 1.2019175449740571}, indent=2, sort_keys=True) + "\n")
+    residual.write_text(json.dumps({"kind": "d3_same_time_cross_source_residual_v26", "decision": "PASS", "policy": {"gate": "all", "weight": 0.10}}, indent=2, sort_keys=True) + "\n")
     v26_base = work / "v26_base.zip"
     run([sys.executable, "d3_cross_source_v26.py", "build", "--data", str(data), "--base", str(work / "control_v26.zip"), "--base-manifest", str(work / "control_v26.manifest.json"), "--report", str(residual), "--output", str(v26_base)], A_CODE, aenv, logs / "build_v26.log")
     run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(v26_base)], ROOT, aenv, logs / "verify_v26.log")

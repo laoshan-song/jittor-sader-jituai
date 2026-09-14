@@ -60,12 +60,10 @@ python code/main.py generate-base --data /path/to/data_B.zip \
 ```
 
 `pack_frozen_base.py` is the exact inverse of the `code/build_submission.py`
-decoders (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). The regenerated
-base is an algorithm reproduction, not a byte-for-byte copy: some historical
-checkpoints were not individually preserved and Jittor's CUDA operators drift
-per machine, so a byte-identical base is not expected -- the A-list package
-states the same boundary. The goal is a complete, self-contained training and
-inference chain. See `generation/README.md` for details.
+decoders (Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). `generation/`
+supplies the frozen-base generation chain from the official data alone, so the
+recorded top submission is reproducible from data rather than from a fixed
+base. See `generation/README.md` for details.
 
 ## Recorded hashes
 

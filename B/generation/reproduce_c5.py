@@ -14,7 +14,6 @@ from pathlib import Path
 
 DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
 ONLINE_SHA256 = "3db0d80defb636d387eb73b8666f38e42cd4bdad3d66b2c71a384045b578dfed"
-ONLINE_SCORE = 1.2813427616203301
 ROOT = Path(__file__).resolve().parent
 C2_ROOT = ROOT / "c2_source"
 C3_REPRO = ROOT / "reproduce_c3.py"
@@ -190,7 +189,6 @@ def main() -> int:
         "data_sha256": DATA_SHA256,
         "submission_sha256": sha256(output),
         "historical_online_submission_sha256": ONLINE_SHA256,
-        "historical_online_score": ONLINE_SCORE,
         "exact_historical_sha": sha256(output) == ONLINE_SHA256,
         "c3_submission_sha256": sha256(c3_zip),
         "c5_gate_report": str(gate),

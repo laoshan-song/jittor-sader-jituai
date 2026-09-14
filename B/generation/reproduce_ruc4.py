@@ -17,7 +17,6 @@ import numpy as np
 
 DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
 ONLINE_SHA256 = "face96780e4cc04d982aa174954aae3479f5d0dd806816390880cb441d56319f"
-ONLINE_SCORE = 1.3546935654333192
 ROWS = {"dataset3.csv": 157_670, "dataset4.csv": 2_322_538}
 SEEDS_D3 = (20260810, 20260824, 20260907)
 SEEDS_D4 = (20261101, 20261117, 20261133)
@@ -472,7 +471,6 @@ def main() -> int:
         "data_sha256": DATA_SHA256,
         "submission_sha256": sha256(output),
         "historical_online_submission_sha256": ONLINE_SHA256,
-        "historical_online_score": ONLINE_SCORE,
         "exact_historical_sha": sha256(output) == ONLINE_SHA256,
         "ruc3_base_sha256": sha256(ruc3_output),
         "final_models": "freshly trained from official data",
