@@ -1,10 +1,9 @@
 # Frozen base generation (official-data full pipeline)
 
-This directory reconstructs `models/frozen_base.ckpt` from the official
-`data_B.zip`. The published package ships the frozen base and reranks it with
-an MF32 residual in `code/build_submission.py`; the code here is the upstream
-half that produces the base itself, closing the `official data -> base scores
--> frozen_base.ckpt -> submission` chain.
+This directory regenerates `frozen_base.ckpt` from the official `data_B.zip`.
+It is independent of the tracked locked assets used by `run_verify.sh` and
+contains the upstream training half that closes the `official data -> base
+scores -> frozen_base.ckpt -> submission` chain.
 
 ## Flow
 
@@ -51,12 +50,16 @@ python code/pipeline/generate_frozen_base.py --data /path/to/data_B.zip \
 ```
 
 The work directory must not already exist. The generated base and a
-`REPRODUCTION_RECEIPT.json` with the actual hashes are written there. Feed the
-base into the existing inference path:
+`REPRODUCTION_RECEIPT.json` with the actual hashes are written there. A fully
+fresh result can then train its MF32 residual and use the shared builder:
 
 ```bash
-bash run_inference.sh /path/to/data_B.zip /data1/b-output 0   # after copying the
-                                                              # base to models/
+python code/train_model.py --data /path/to/data_B.zip \
+  --output-dir /data1/b-fresh-mf32
+python code/build_submission.py --data /path/to/data_B.zip \
+  --base /data1/b-frozen-base/frozen_base.ckpt \
+  --checkpoint /data1/b-fresh-mf32/d4_implicit_mf32.npz \
+  --output-dir /data1/b-fresh-result --unlocked
 ```
 
 ## Scope
@@ -64,9 +67,9 @@ bash run_inference.sh /path/to/data_B.zip /data1/b-output 0   # after copying th
 This directory supplies the frozen-base generation chain: it trains the
 Dataset3/Dataset4 components from the official data and packs the resulting
 score matrices into `frozen_base.ckpt`, which `code/build_submission.py` then
-reranks to reproduce the recorded top submission. It is the upstream generation
-half only; supervision is the official training data alone, and no answer
-files, external data, or the frozen base itself are read.
+reranks in the fresh-training path. It is the upstream generation half only;
+supervision is the official training data alone, and no answer files, external
+data, or tracked locked assets are read.
 
 ## Environment
 

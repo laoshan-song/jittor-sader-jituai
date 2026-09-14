@@ -23,3 +23,6 @@ formal/track1_dynamic_recommendation/
 *.npy
 result.json
 result.zip
+
+# The locked MF32 model is required for clone + data_B exact reproduction.
+!B/code/assets/locked/d4_implicit_mf32.npz

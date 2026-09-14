@@ -9,7 +9,7 @@ import hashlib
 import io
 import json
 import lzma
-import zipfile
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +23,12 @@ MODEL_DECODED_SHA256 = {
     "item_bias.weight": "67833cfb2292edd51e4f361e9f5cb3965130fce26d97b32c015b349f7a91c197",
 }
 BASE_SHA256 = "e46182a6114b0089b9e05d03672b93c28758624ef02b7d97357b1994cddf3d18"
+BASE_BYTES = 257_814_859
+BASE_PARTS = tuple(
+    f"code/assets/locked/frozen_base.ckpt.part{suffix}"
+    for suffix in ("aa", "ab", "ac", "ad")
+)
+MODEL_PATH = "code/assets/locked/d4_implicit_mf32.npz"
 A_REFERENCE_SHA256 = "d159f406a4b6376eb29ebe5b7d54c2481094706dd9f6c67987792cb62966e275"
 TARGET_SHA256 = "9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba"
 Q7_D4_MAGIC = b"TRACK1-B-D4-Q7-V1\n"
@@ -38,11 +44,12 @@ REQUIRED = {
     "A_LIST_REFERENCE.md",
     "requirements.txt",
     "submission_metadata.json",
-    "models/frozen_base.ckpt",
-    "models/d4_implicit_mf32.npz",
+    *BASE_PARTS,
+    MODEL_PATH,
     "code/main.py",
     "code/model.py",
     "code/build_submission.py",
+    "code/restore_locked_assets.py",
     "code/train_model.py",
     "code/check_environment.py",
     "code/audit_package.py",
@@ -69,6 +76,24 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(8 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def restored_frozen_base(root: Path):
+    handle = tempfile.TemporaryFile()
+    digest = hashlib.sha256()
+    written = 0
+    for relative in BASE_PARTS:
+        path = root / relative
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(8 << 20), b""):
+                handle.write(block)
+                digest.update(block)
+                written += len(block)
+    if written != BASE_BYTES or digest.hexdigest() != BASE_SHA256:
+        handle.close()
+        raise ValueError("tracked frozen-base parts differ")
+    handle.seek(0)
+    return handle
 
 
 def imports(path: Path) -> set[str]:
@@ -125,11 +150,11 @@ def main() -> int:
     for relative, expected in manifest.items():
         if sha256(root / relative) != expected:
             raise ValueError(f"manifest hash differs: {relative}")
-    if sha256(root / "models/frozen_base.ckpt") != BASE_SHA256:
-        raise ValueError("frozen base hash differs")
-    if sha256(root / "models/d4_implicit_mf32.npz") != MODEL_SHA256:
+    if sha256(root / MODEL_PATH) != MODEL_SHA256:
         raise ValueError("Jittor checkpoint hash differs")
-    with np.load(root / "models/frozen_base.ckpt", allow_pickle=False) as archive:
+    with restored_frozen_base(root) as frozen_base, np.load(
+        frozen_base, allow_pickle=False
+    ) as archive:
         if archive.files != ["kind", "dataset3_q35_lzma", "dataset4_q7"]:
             raise ValueError("frozen checkpoint members differ")
         if str(archive["kind"].item()) != "track1_b_frozen_score_q7_d3q35_v1":
@@ -149,7 +174,7 @@ def main() -> int:
             raise ValueError("frozen checkpoint payload size differs")
         if d4[: len(Q7_D4_MAGIC)].tobytes() != Q7_D4_MAGIC:
             raise ValueError("packed Dataset4 base magic differs")
-    with np.load(root / "models/d4_implicit_mf32.npz", allow_pickle=False) as checkpoint:
+    with np.load(root / MODEL_PATH, allow_pickle=False) as checkpoint:
         expected_kind = f"d4_implicit_mf_q{MODEL_BITS}row_v1"
         expected_model_files = [
             "kind", "source_count", "item_count", "embedding_dim",
@@ -261,6 +286,9 @@ def main() -> int:
         source = (root / launcher).read_text(encoding="utf-8")
         if "prepare_cuda_runtime.sh" not in source or "check_environment.py" not in source:
             raise ValueError(f"CUDA preparation or environment check is absent: {launcher}")
+    locked_launcher = (root / "run_inference.sh").read_text(encoding="utf-8")
+    if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
+        raise ValueError("locked inference does not restore the tracked assets")
     reference = (root / "A_LIST_REFERENCE.md").read_text(encoding="utf-8")
     if A_REFERENCE_SHA256 not in reference:
         raise ValueError("A-list reference is incomplete")
@@ -290,7 +318,7 @@ def main() -> int:
         "decision": "PASS",
         "file_count": len(files),
         "base_sha256": BASE_SHA256,
-        "frozen_base_path": "models/frozen_base.ckpt",
+        "frozen_base_path": "restored from code/assets/locked/frozen_base.ckpt.part*",
         "checkpoint_sha256": MODEL_SHA256,
         "final_result_packaged": False,
         "official_data_packaged": False,

@@ -14,8 +14,10 @@ export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$(dirname "$OUT")/.pycache}"
 export TMPDIR="${TMPDIR:-$(dirname "$OUT")/.tmp}"
 export ML_CACHE_ROOT="${ML_CACHE_ROOT:-$(dirname "$OUT")/.runtime}"
 mkdir -p "$JITTOR_HOME" "$PYTHONPYCACHEPREFIX" "$TMPDIR"
+LOCKED_BASE="$ML_CACHE_ROOT/locked_assets/frozen_base.ckpt"
+"$PYTHON" "$ROOT/code/restore_locked_assets.py" --output "$LOCKED_BASE"
 source "$ROOT/code/prepare_cuda_runtime.sh" "$PYTHON"
 "$PYTHON" "$ROOT/code/check_environment.py"
 exec "$PYTHON" "$ROOT/code/build_submission.py" \
-  --data "$DATA" --base "$ROOT/models/frozen_base.ckpt" \
-  --checkpoint "$ROOT/models/d4_implicit_mf32.npz" --output-dir "$OUT"
+  --data "$DATA" --base "$LOCKED_BASE" \
+  --checkpoint "$ROOT/code/assets/locked/d4_implicit_mf32.npz" --output-dir "$OUT"
