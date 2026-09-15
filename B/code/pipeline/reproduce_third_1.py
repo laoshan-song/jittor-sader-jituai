@@ -36,7 +36,6 @@ def env_for(args: argparse.Namespace, work: Path, gpu: int) -> dict[str, str]:
     env.update(
         {
             "PYTHONPATH": os.pathsep.join(map(str, (CODE, B_RANK, THIRD, RUC3, RUC4))),
-            "CUDA_VISIBLE_DEVICES": str(gpu),
             "JT_USE_CUDA": "1",
             "use_cutt": "0",
             "use_cutlass": "0",
@@ -48,6 +47,7 @@ def env_for(args: argparse.Namespace, work: Path, gpu: int) -> dict[str, str]:
             "JITTOR_HOME": str(args.jittor_home.resolve() if args.jittor_home else work / "runtime" / "jittor"),
         }
     )
+    env.setdefault("CUDA_VISIBLE_DEVICES", str(gpu))
     for key in ("HOME", "XDG_CACHE_HOME", "TMPDIR", "JITTOR_HOME"):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     if args.cuda_home:

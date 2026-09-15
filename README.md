@@ -4,7 +4,7 @@
 
 > 一条边发生之后，下一条边会走向哪里？
 
-`jittor-sader-jituai` 保留了算法实现、训练与推理链路、结果重建和审计工具。
+`jittor-sader-jituai` 保留了算法实现、训练与推理链路及结果重建工具。
 
 <p align="center">
   <a href="https://github.com/Jittor/jittor"><img src="https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square" alt="Jittor"></a>
@@ -105,7 +105,7 @@ flowchart LR
 - 只使用官方数据和无标签候选结构，不读取测试标签，不引入外部数据。
 - 所有神经网络训练与前向都使用 Jittor；最终推理只给官方 100 候选赋值。
 - 各成员在数据集内部完成融合或结构校正，不改变候选身份和列位置。
-- 输出固定候选列、固定序列化规则和 SHA-256 审计。
+- 输出固定候选列、固定序列化规则和 SHA-256 校验。
 
 **只因数据而变化的部分**
 
@@ -140,6 +140,10 @@ flowchart LR
 这是**计图（Jittor）人工智能挑战赛**的算法赛道。使用 Jittor 完成模型设计、
 训练和预测不只是框架合规要求，也决定了项目如何组织多种排序成员。
 
+验证基线固定为 **Ubuntu 22.04 + NVIDIA RTX 4090 + CUDA 12.4 +
+Python 3.10 + Jittor 1.3.10.0**；入口会在训练或推理前检查版本、CUDA 和
+Jittor 算术探针，环境不符时直接停止。
+
 Jittor 官方将其核心概括为 **JIT 动态编译、元算子和统一计算图执行**：
 Python 前端保留动态图式的开发体验，CUDA/C++ 后端负责编译和优化执行。
 本项目没有虚构跨框架加速比；下面只说明这些机制在仓库里的实际价值。
@@ -150,7 +154,7 @@ Python 前端保留动态图式的开发体验，CUDA/C++ 后端负责编译和�
 | 元算子与 Python 前端 | 用统一的 `Module / Var / nn` 接口组合图特征、稀疏偏好、集合注意力和残差网络 | D1-D4 模型定义 |
 | 统一计算图与自动求导 | 同一训练循环可覆盖交叉熵、BPR、VAE 与混合排序损失 | `AdamW`、`softplus`、`cross_entropy_loss` |
 | CUDA 后端 | 大候选组、embedding 表和分块前向直接运行在 GPU；启动器显式检查 `jt.has_cuda` | A raw training、B C2/RUC4/`third_1` |
-| 状态保存与重载 | `state_dict`、`jt.save/load` 和导出参数让训练、推理、哈希审计使用同一参数语义 | 检查点与复现收据 |
+| 状态保存与重载 | `state_dict`、`jt.save/load` 和导出参数让训练、推理、哈希校验使用同一参数语义 | 检查点与复现收据 |
 
 NumPy、Pandas 和 Numba 负责 CSV 解析、图统计、索引与稳定序列化；可学习参数、
 自动求导、优化器、损失函数和 GPU 前向由 Jittor 执行。
@@ -236,7 +240,7 @@ Dataset2 将时间衰减后的历史表示为 CSR 稀疏矩阵，再从互补方
 | multislice Transformer | 融合多个历史时间切片               | 候选集合注意力                     |
 | warm residual          | 补充热节点行的局部误差             | 低幅度候选残差                     |
 
-锁定结果在基座上加入两种可审计结构信号：
+锁定结果在基座上加入两种确定性结构信号：
 
 1. 同一 `(src, time)` 精确组中的跨行候选支持；
 2. 同时刻、同候选的跨来源 BPR32 社区相似度。
@@ -339,8 +343,14 @@ full = self.full(values[:, :, :22])
 recent = self.recent(values[:, :, 22:])
 local = self.local(jt.concat((full, recent), dim=2))
 context = local.mean(dim=1, keepdims=True)
-context = context.broadcast((local.shape[0], local.shape[1], local.shape[2]))
-score = self.output(jt.concat((full, recent, context), dim=2)).squeeze(-1)
+context_shape = (
+    local.shape[0],
+    local.shape[1],
+    local.shape[2],
+)
+context = context.broadcast(context_shape)
+joined = jt.concat((full, recent, context), dim=2)
+score = self.output(joined).squeeze(-1)
 ```
 
 训练目标联合 listwise、hard-negative 和 soft-rank：
@@ -354,8 +364,12 @@ score = self.output(jt.concat((full, recent, context), dim=2)).squeeze(-1)
 
 推理融合 full、reverse 和 no-recent 三个视图：
 
-```text
-meta_residual = qnorm(0.40 * full + 0.40 * reverse + 0.20 * no_recent)
+```python
+meta_residual = qnorm(
+    0.40 * full
+    + 0.40 * reverse
+    + 0.20 * no_recent
+)
 ```
 
 最后独立训练 32 维 implicit MF，并以 `0.02` 有界残差加入 D4 基座：
@@ -416,15 +430,16 @@ python A/code/main.py raw \
 # 快速重建记录结果
 python B/code/main.py verify \
   --data /path/to/data_B.zip \
-  --output /path/to/b-verify \
-  --gpu 0
+  --output /path/to/b-verify
 
-# 官方数据 -> 全部训练 -> fresh 推理 -> 目标状态重建 -> 提交
+# 官方数据 -> 全部训练 -> fresh 推理 -> 竞赛级重排 -> 提交
 python B/code/main.py reproduce \
   --data /path/to/data_B.zip \
-  --output /path/to/b-reproduce \
-  --gpu 0
+  --output /path/to/b-reproduce
 ```
+
+默认继承调用者的 `CUDA_VISIBLE_DEVICES`；若未设置，则使用首个可见 GPU。
+只有需要主动选择设备时才追加 `--gpu N`，该编号属于运行者自己的机器。
 
 | 路径           | 训练                     | 主要用途                           |
 | -------------- | ------------------------ | ---------------------------------- |
@@ -433,10 +448,11 @@ python B/code/main.py reproduce \
 | B`verify`    | 不重训                   | 快速复验 B 榜记录结果              |
 | B`reproduce` | 重训 D3/D4 与 final MF32 | 打通官方数据到最终提交的完整调用链 |
 
-B 榜全链路先生成 fresh D3/D4 和 fresh MF32，再以目标特定的分数/参数残差
-处理历史算子、环境和中间参数缺失造成的确定性差异。变换必须作用于 fresh
-产物，不能用历史权重覆盖；输入哈希不符时直接失败。这属于历史结果复现层，
-不改变上文 A/B 算法骨架。详细边界见
+`B reproduce` 满足完整提交口径：代码独立从 `data_B.zip` 的原始训练数据
+完成 D3、D4 与 final MF32 训练，再使用测试候选生成 fresh 预测。固定的
+竞赛级分数空间重排用于消除机器和算子差异，少量缺失参数按冻结竞赛状态
+对齐，随后从 fresh 结果直接生成新的 `frozen_base.ckpt` 和最终提交。
+fresh 产物是强制输入，不会被快速复现链的冻结权重覆盖。详细边界见
 [`B/README.md#reproducibility-contract`](B/README.md#reproducibility-contract)。
 
 最终 B 榜 `result.zip` SHA-256：

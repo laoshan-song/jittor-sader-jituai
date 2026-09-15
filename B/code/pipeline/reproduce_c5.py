@@ -143,7 +143,7 @@ def main() -> int:
             (str(cuda_home / "lib64"), env.get("LD_LIBRARY_PATH", ""))
         )
     if args.gpu is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+        env.setdefault("CUDA_VISIBLE_DEVICES", str(args.gpu))
 
     c3_args = [
         sys.executable,

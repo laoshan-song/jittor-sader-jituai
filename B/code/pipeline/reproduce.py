@@ -24,12 +24,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def runtime_env(work: Path, gpu: int, jittor_home: Path | None, cuda_home: Path | None) -> dict[str, str]:
+def runtime_env(
+    work: Path,
+    gpu: int | None,
+    jittor_home: Path | None,
+    cuda_home: Path | None,
+) -> dict[str, str]:
     env = os.environ.copy()
     runtime = work / "runtime"
     env.update(
         {
-            "CUDA_VISIBLE_DEVICES": str(gpu),
             "JT_USE_CUDA": "1",
             "use_cutt": "0",
             "use_cutlass": "0",
@@ -42,13 +46,23 @@ def runtime_env(work: Path, gpu: int, jittor_home: Path | None, cuda_home: Path 
             "PYTHONPYCACHEPREFIX": str(runtime / "pycache"),
         }
     )
-    for key in ("HOME", "XDG_CACHE_HOME", "JITTOR_HOME", "TMPDIR", "PYTHONPYCACHEPREFIX"):
+    if gpu is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    for key in (
+        "HOME",
+        "XDG_CACHE_HOME",
+        "JITTOR_HOME",
+        "TMPDIR",
+        "PYTHONPYCACHEPREFIX",
+    ):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     if cuda_home:
         cuda = cuda_home.resolve()
         env["CUDA_HOME"] = str(cuda)
         env["PATH"] = os.pathsep.join((str(cuda / "bin"), env.get("PATH", "")))
-        env["LD_LIBRARY_PATH"] = os.pathsep.join((str(cuda / "lib64"), env.get("LD_LIBRARY_PATH", "")))
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            (str(cuda / "lib64"), env.get("LD_LIBRARY_PATH", ""))
+        )
     return env
 
 
@@ -56,13 +70,22 @@ def run(command: list[str], env: dict[str, str], log: Path) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     print("RUN", " ".join(command), flush=True)
     with log.open("x", encoding="utf-8") as handle:
-        subprocess.run(command, cwd=ROOT, env=env, stdout=handle, stderr=subprocess.STDOUT, check=True)
+        subprocess.run(
+            command,
+            cwd=ROOT,
+            env=env,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
 
 
 def source_manifest() -> dict[str, str]:
     files = sorted(
         path for path in ROOT.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.name != "SOURCE_MANIFEST.json"
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.name != "SOURCE_MANIFEST.json"
     )
     return {path.relative_to(ROOT).as_posix(): sha256(path) for path in files}
 
@@ -71,7 +94,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, required=True, help="official data_B.zip")
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--gpu", type=int, default=3)
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        help="optional physical GPU index; omitted preserves CUDA visibility",
+    )
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
     parser.add_argument("--quick", action="store_true", help="integrity and Jittor linkage test")
@@ -92,7 +119,12 @@ def main() -> int:
     )
     (work / "source_audit.json").write_text(audit.stdout, encoding="utf-8")
     python_files = [str(path) for path in ROOT.rglob("*.py")]
-    subprocess.run([sys.executable, "-m", "py_compile", *python_files], cwd=ROOT, env=env, check=True)
+    subprocess.run(
+        [sys.executable, "-m", "py_compile", *python_files],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
 
     linkage = subprocess.run(
         [
@@ -115,8 +147,10 @@ def main() -> int:
         command = [
             sys.executable, str(ROOT / "reproduce_third_1.py"),
             "--data", str(data), "--work-dir", str(work / "pipeline_smoke"),
-            "--gpus", str(args.gpu), "--quick",
+            "--quick",
         ]
+        if args.gpu is not None:
+            command += ["--gpus", str(args.gpu)]
         if args.jittor_home:
             command += ["--jittor-home", str(args.jittor_home.resolve())]
         if args.cuda_home:
@@ -128,10 +162,11 @@ def main() -> int:
         command = [
             sys.executable, str(ROOT / "reproduce_third_1.py"),
             "--data", str(data), "--work-dir", str(work / "pipeline"),
-            "--gpus", str(args.gpu),
             "--mf-embedding-dim", "512", "--mf-negative-count", "64",
             "--mf-epochs", "3",
         ]
+        if args.gpu is not None:
+            command += ["--gpus", str(args.gpu)]
         if args.jittor_home:
             command += ["--jittor-home", str(args.jittor_home.resolve())]
         if args.cuda_home:
@@ -152,7 +187,9 @@ def main() -> int:
         "uses_answer_derived_cache": False,
         "bundled_data": False,
         "bundled_model_weights": False,
-        "cuda_visible_devices": str(args.gpu),
+        "cuda_visible_devices": env.get(
+            "CUDA_VISIBLE_DEVICES", "first visible device"
+        ),
         "source_manifest": source_manifest(),
         "output": output,
     }

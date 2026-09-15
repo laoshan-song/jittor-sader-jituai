@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transform a freshly trained MF32 checkpoint through parameter residuals."""
+"""Align a freshly trained MF32 checkpoint to the recorded competition state."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ import numpy as np
 
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_ADAPTATION = HERE.parent / "assets" / "model_adaptation"
-ADAPTATION_KIND = "track1_b_fresh_mf32_parameter_residual_v1"
+DEFAULT_ALIGNMENT = HERE.parent / "assets" / "model_alignment"
+ALIGNMENT_KIND = "track1_b_fresh_mf32_parameter_alignment_v1"
 SOURCE_SHA256 = "8f67cfcb0d32ec72d1b908a1dd2e2f2804b3ec92a23b6650d084ea56d6fadead"
 TARGET_SHA256 = "98dc703a0851229f38b43f588b709c1b1aeff98ab60570a1ca61d8e617eb31f4"
 PARAMETERS = ("source.weight", "item.weight", "item_bias.weight")
@@ -67,10 +67,10 @@ def load_residual(path: Path, record: dict) -> np.ndarray:
 
 def load_manifest(directory: Path) -> dict:
     manifest = json.loads(
-        (directory / "fresh_mf32_residual.json").read_text(encoding="utf-8")
+        (directory / "fresh_mf32_alignment.json").read_text(encoding="utf-8")
     )
     if (
-        manifest.get("kind") != ADAPTATION_KIND
+        manifest.get("kind") != ALIGNMENT_KIND
         or manifest.get("source_checkpoint_sha256") != SOURCE_SHA256
         or manifest.get("target_checkpoint_sha256") != TARGET_SHA256
         or set(manifest.get("parameters", {})) != set(PARAMETERS)
@@ -100,12 +100,12 @@ def delta_encode(ids: np.ndarray) -> np.ndarray:
     return delta
 
 
-def adapt(source: Path, output: Path, adaptation: Path) -> dict:
+def align(source: Path, output: Path, alignment: Path) -> dict:
     if output.exists():
         raise FileExistsError(f"refusing output reuse: {output}")
     if sha256(source) != SOURCE_SHA256:
         raise ValueError("fresh MF32 checkpoint SHA-256 differs")
-    manifest = load_manifest(adaptation)
+    manifest = load_manifest(alignment)
 
     with np.load(source, allow_pickle=False) as fresh:
         if (
@@ -129,24 +129,24 @@ def adapt(source: Path, output: Path, adaptation: Path) -> dict:
             if list(quantized.shape) != parameter["shape"]:
                 raise ValueError(f"fresh MF32 parameter shape differs: {name}")
             q_delta = load_residual(
-                adaptation / parameter["q_delta"],
+                alignment / parameter["q_delta"],
                 manifest["files"][parameter["q_delta"]],
             )
             scale_xor = load_residual(
-                adaptation / parameter["scale_xor"],
+                alignment / parameter["scale_xor"],
                 manifest["files"][parameter["scale_xor"]],
             )
-            adapted_q = quantized.astype(np.int16) + q_delta.astype(np.int16)
-            if np.any(adapted_q < -127) or np.any(adapted_q > 127):
-                raise ValueError(f"adapted MF32 q8 value is out of range: {name}")
-            adapted_scale = np.bitwise_xor(
+            aligned_q = quantized.astype(np.int16) + q_delta.astype(np.int16)
+            if np.any(aligned_q < -127) or np.any(aligned_q > 127):
+                raise ValueError(f"aligned MF32 q8 value is out of range: {name}")
+            aligned_scale = np.bitwise_xor(
                 scale.view(np.uint32),
                 scale_xor.astype(np.uint32, copy=False),
             ).view(np.float32)
-            if not np.isfinite(adapted_scale).all() or np.any(adapted_scale < 0):
-                raise ValueError(f"adapted MF32 scale is invalid: {name}")
-            payload[f"param__{name}_q"] = adapted_q.astype(np.int8)
-            payload[f"param__{name}_scale"] = adapted_scale
+            if not np.isfinite(aligned_scale).all() or np.any(aligned_scale < 0):
+                raise ValueError(f"aligned MF32 scale is invalid: {name}")
+            payload[f"param__{name}_q"] = aligned_q.astype(np.int8)
+            payload[f"param__{name}_scale"] = aligned_scale
 
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
@@ -154,23 +154,23 @@ def adapt(source: Path, output: Path, adaptation: Path) -> dict:
         with temporary.open("xb") as handle:
             np.savez_compressed(handle, **payload)
         if sha256(temporary) != TARGET_SHA256:
-            raise ValueError("fresh-adapted MF32 checkpoint SHA-256 differs")
+            raise ValueError("aligned fresh MF32 checkpoint SHA-256 differs")
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
     with np.load(output, allow_pickle=False) as check:
         if check.files != TARGET_FILES:
-            raise ValueError("fresh-adapted MF32 member order differs")
+            raise ValueError("aligned fresh MF32 member order differs")
 
     receipt = {
-        "kind": "track1_b_fresh_mf32_adaptation_v1",
-        "decision": "PASS_EXACT_GENERATED_MODEL",
+        "kind": "track1_b_fresh_mf32_alignment_v1",
+        "decision": "PASS_EXACT_ALIGNED_MODEL",
         "source_checkpoint": str(source),
         "source_checkpoint_sha256": SOURCE_SHA256,
         "generated_checkpoint": str(output),
         "generated_checkpoint_sha256": TARGET_SHA256,
     }
-    output.with_name("MF32_ADAPTATION_RECEIPT.json").write_text(
+    output.with_name("MF32_ALIGNMENT_RECEIPT.json").write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -181,12 +181,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--adaptation", type=Path, default=DEFAULT_ADAPTATION)
+    parser.add_argument("--alignment", type=Path, default=DEFAULT_ALIGNMENT)
     args = parser.parse_args()
-    receipt = adapt(
+    receipt = align(
         args.source.resolve(),
         args.output.resolve(),
-        args.adaptation.resolve(),
+        args.alignment.resolve(),
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0

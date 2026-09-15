@@ -809,7 +809,7 @@ def _self_test() -> dict[str, Any]:
                     "source_hashes": source_hashes,
                     "submission_sha256": _sha256_file(result),
                     "jittor_runtime": {
-                        "jittor": "1.3.11.0",
+                        "jittor": "1.3.10.0",
                         "has_cuda": True,
                         "use_cuda": True,
                     },
@@ -876,7 +876,7 @@ def _self_test() -> dict[str, Any]:
                     "source_hashes": temporal_source_hashes,
                     "submission_sha256": _sha256_file(result),
                     "jittor_runtime": {
-                        "jittor": "1.3.11.0",
+                        "jittor": "1.3.10.0",
                         "has_cuda": True,
                         "use_cuda": True,
                     },
@@ -925,7 +925,7 @@ def _self_test() -> dict[str, Any]:
                     "submission_sha256": _sha256_file(result),
                     "row_counts": {"dataset3": 1, "dataset4": 1},
                     "jittor_runtime": {
-                        "version": "1.3.11.0",
+                        "version": "1.3.10.0",
                         "has_cuda": True,
                         "use_cuda": True,
                     },

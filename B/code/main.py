@@ -18,19 +18,31 @@ def main() -> int:
         choices=("verify", "reproduce"),
         help=(
             "verify reconstructs the retained byte-exact result; reproduce "
-            "retrains and exactly adapts the complete fresh data_B.zip chain"
+            "rebuilds and aligns the complete fresh data_B.zip chain"
         ),
     )
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        help=(
+            "optional physical GPU index; omitted preserves CUDA_VISIBLE_DEVICES "
+            "or uses the first CUDA-visible device"
+        ),
+    )
     args = parser.parse_args()
     scripts = {
-        "verify": ["run_verify.sh", args.data, args.output, args.gpu],
-        "reproduce": ["run_reproduce.sh", args.data, args.output, args.gpu],
+        "verify": ["run_verify.sh", args.data, args.output],
+        "reproduce": ["run_reproduce.sh", args.data, args.output],
     }
     command = scripts[args.command]
-    return subprocess.run(["bash", str(ROOT / command[0]), *map(str, command[1:])], cwd=ROOT).returncode
+    if args.gpu is not None:
+        command.append(args.gpu)
+    return subprocess.run(
+        ["bash", str(ROOT / command[0]), *map(str, command[1:])],
+        cwd=ROOT,
+    ).returncode
 
 
 if __name__ == "__main__":

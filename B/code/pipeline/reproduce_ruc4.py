@@ -57,7 +57,6 @@ def runtime_env(args: argparse.Namespace, work: Path, gpu: int) -> dict[str, str
     env.update(
         {
             **JITTOR_OFFLINE_ENV,
-            "CUDA_VISIBLE_DEVICES": str(gpu),
             "JT_USE_CUDA": "1",
             "HOME": str(work / "runtime" / "home"),
             "XDG_CACHE_HOME": str(work / "runtime" / "cache"),
@@ -69,6 +68,7 @@ def runtime_env(args: argparse.Namespace, work: Path, gpu: int) -> dict[str, str
             "PYTHONPATH": os.pathsep.join(map(str, paths)),
         }
     )
+    env.setdefault("CUDA_VISIBLE_DEVICES", str(gpu))
     for name in ("HOME", "XDG_CACHE_HOME", "TMPDIR", "JITTOR_HOME"):
         Path(env[name]).mkdir(parents=True, exist_ok=True)
     if args.cuda_home:

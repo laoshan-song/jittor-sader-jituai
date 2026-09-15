@@ -16,14 +16,15 @@ model members and reproduction mechanisms are dataset-specific.
 | Output | deterministic two-member ZIP | deterministic two-member ZIP | fixed order, fixed digits, SHA-256 |
 | Delivery | verify from retained final state | verify + full-chain fresh reproduce | fixed public interfaces and audited output |
 
-## Dataset-specific adaptations
+## Dataset-specific configuration
 
-The B-list dataset is larger (more sources/items, larger query set), so the shared
-framework is instantiated with expanded entity vocabularies, sorted-vocabulary
-index mapping, chunked reading and streaming batches, and more member
-seeds/stages wired through the same in-row fusion. Dataset3 expands the
-same graph-ranking and set-model principles through nine base members and
-C2/C3/C5/C6/RUC4 stages; Dataset4 expands temporal, MF, session-graph, and meta
-members. Both feed the same candidate-local calibration and deterministic
-serialization used on the A list. These differences adapt the shared framework to B-list fields and scale; they
+The B-list dataset is larger (more sources/items, larger query set), so the
+shared framework is instantiated with expanded entity vocabularies,
+sorted-vocabulary index mapping, chunked reading and streaming batches, and
+more member seeds/stages wired through the same in-row fusion. Dataset3
+expands the same graph-ranking and set-model principles through nine base
+members and C2/C3/C5/C6/RUC4 stages; Dataset4 expands temporal, MF,
+session-graph, and meta members. Both feed the same candidate-local
+calibration and deterministic serialization used on the A list. These
+differences configure the shared framework for B-list fields and scale; they
 do not change the task or candidate boundary.

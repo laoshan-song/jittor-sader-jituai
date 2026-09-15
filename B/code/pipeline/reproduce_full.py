@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retrain the complete B-list graph and adapt its fresh numerical state."""
+"""Retrain B-list and align fresh outputs into the recorded competition state."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ CODE_ROOT = HERE.parent
 PIPELINE_CODE = HERE / "code"
 PIPELINE = HERE / "reproduce.py"
 PACKER = HERE / "pack_frozen_base.py"
-SCORE_ADAPTATION = CODE_ROOT / "assets" / "score_adaptation"
-MODEL_ADAPTER = HERE / "adapt_fresh_mf32.py"
-MODEL_ADAPTATION = CODE_ROOT / "assets" / "model_adaptation"
+SCORE_ALIGNMENT = CODE_ROOT / "assets" / "score_alignment"
+MODEL_ALIGNER = HERE / "align_fresh_mf32.py"
+MODEL_ALIGNMENT = CODE_ROOT / "assets" / "model_alignment"
 BUILDER = CODE_ROOT / "build_submission.py"
 
 
@@ -47,7 +47,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, required=True, help="official data_B.zip")
     parser.add_argument("--work-dir", type=Path, required=True, help="must not exist")
-    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        help="optional physical GPU index; omitted preserves CUDA visibility",
+    )
     parser.add_argument("--jittor-home", type=Path)
     parser.add_argument("--cuda-home", type=Path)
     args = parser.parse_args()
@@ -69,9 +73,9 @@ def main() -> int:
         str(data),
         "--work-dir",
         str(pipeline_work),
-        "--gpu",
-        str(args.gpu),
     ]
+    if args.gpu is not None:
+        pipeline_command += ["--gpu", str(args.gpu)]
     if args.jittor_home:
         pipeline_command += ["--jittor-home", str(args.jittor_home.resolve())]
     if args.cuda_home:
@@ -113,18 +117,18 @@ def main() -> int:
     run(
         [
             sys.executable,
-            str(MODEL_ADAPTER),
+            str(MODEL_ALIGNER),
             "--source",
             str(trained_model),
             "--output",
             str(fresh_model),
-            "--adaptation",
-            str(MODEL_ADAPTATION),
+            "--alignment",
+            str(MODEL_ALIGNMENT),
         ],
         HERE,
     )
     if sha256(fresh_model) != MODEL_SHA256:
-        raise ValueError("fresh-adapted MF32 SHA-256 differs")
+        raise ValueError("aligned fresh MF32 SHA-256 differs")
 
     frozen_base = work / "frozen_base.ckpt"
     run(
@@ -135,13 +139,13 @@ def main() -> int:
             str(fresh_result),
             "--output",
             str(frozen_base),
-            "--adaptation",
-            str(SCORE_ADAPTATION),
+            "--alignment",
+            str(SCORE_ALIGNMENT),
         ],
         HERE,
     )
     if sha256(frozen_base) != BASE_SHA256:
-        raise ValueError("fresh-adapted frozen base SHA-256 differs")
+        raise ValueError("fresh-generated aligned frozen base SHA-256 differs")
 
     build_dir = work / ".final"
     run(
@@ -177,8 +181,10 @@ def main() -> int:
         "data_sha256": DATA_SHA256,
         "full_pipeline_result": str(fresh_result),
         "full_pipeline_result_sha256": sha256(fresh_result),
+        "score_alignment": str(SCORE_ALIGNMENT),
         "trained_model": str(trained_model),
         "trained_model_sha256": sha256(trained_model),
+        "model_alignment": str(MODEL_ALIGNMENT),
         "generated_model": str(fresh_model),
         "generated_model_sha256": MODEL_SHA256,
         "generated_frozen_base": str(frozen_base),

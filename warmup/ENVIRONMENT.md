@@ -19,7 +19,7 @@ python warmup/verify_env.py
 Expected highlights:
 
 - Python path: `/tmp/ml_venv/bin/python`
-- `jittor 1.3.11.0`
+- `jittor 1.3.10.0`
 - `has_cuda False`
 - `sum 6`
 - `gcn_output_shape (4, 2)`
@@ -39,7 +39,7 @@ It also sets:
 
 ## Installed Core Packages
 
-- `jittor==1.3.11.0`
+- `jittor==1.3.10.0`
 - `jittor_geometric==2.0.0`
 - `numpy`, `scipy`, `scikit-learn`, `pandas`, `networkx`, `tqdm`
 

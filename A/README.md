@@ -158,9 +158,11 @@ checkpoint has identical bytes to the historical snapshot.
 Dataset1 adds the locked source-support adjustment to the frozen base score.
 Dataset2 computes:
 
-```text
-qnorm(log(base)) + 0.05 * qnorm(exact_other_row_support > 0)
-                 + 0.02 * qnorm(cross_source_community_top10pct)
+```math
+z=
+\mathrm{qnorm}(\log p_{\mathrm{base}})
++0.05\,\mathrm{qnorm}(I_{\mathrm{exact}})
++0.02\,\mathrm{qnorm}(I_{\mathrm{community}}).
 ```
 
 The final community term groups candidate occurrences by time and candidate

@@ -1,8 +1,8 @@
-# Target: Ubuntu 22.04, Python 3.10, CUDA 12.4-compatible toolkit, Jittor 1.3.11.
+# Target: Ubuntu 22.04, Python 3.10, CUDA 12.4-compatible toolkit, Jittor 1.3.10.0.
 numpy==1.26.4
 pandas==2.2.3
 numba==0.66.0
-jittor==1.3.11.0
+jittor==1.3.10.0
 jittor-geometric>=0.1.0
 nvidia-cudnn-cu12==8.9.7.29
 scikit-learn==1.5.2

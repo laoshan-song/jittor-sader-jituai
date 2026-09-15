@@ -30,8 +30,12 @@ BASE_PARTS = tuple(
 )
 MODEL_PATH = "code/assets/locked/d4_implicit_mf32.npz"
 LOCKED_FILES = {*BASE_PARTS, MODEL_PATH}
-SCORE_ADAPTATION_MANIFEST = "code/assets/score_adaptation/fresh_score_residual.json"
-MODEL_ADAPTATION_MANIFEST = "code/assets/model_adaptation/fresh_mf32_residual.json"
+SCORE_ALIGNMENT_MANIFEST = (
+    "code/assets/score_alignment/fresh_score_alignment.json"
+)
+MODEL_ALIGNMENT_MANIFEST = (
+    "code/assets/model_alignment/fresh_mf32_alignment.json"
+)
 FRESH_RESULT_SHA256 = "dfff58258428fde2e5c581edeeb4edf644079e16ee35cc463c9c9fbe825fb233"
 FRESH_MODEL_SHA256 = "8f67cfcb0d32ec72d1b908a1dd2e2f2804b3ec92a23b6650d084ea56d6fadead"
 A_REFERENCE_SHA256 = "d159f406a4b6376eb29ebe5b7d54c2481094706dd9f6c67987792cb62966e275"
@@ -51,8 +55,8 @@ REQUIRED = {
     "submission_metadata.json",
     *BASE_PARTS,
     MODEL_PATH,
-    SCORE_ADAPTATION_MANIFEST,
-    MODEL_ADAPTATION_MANIFEST,
+    SCORE_ALIGNMENT_MANIFEST,
+    MODEL_ALIGNMENT_MANIFEST,
     "code/main.py",
     "code/model.py",
     "code/build_submission.py",
@@ -66,7 +70,7 @@ REQUIRED = {
     "code/pipeline/reproduce.py",
     "code/pipeline/reproduce_third_1.py",
     "code/pipeline/reproduce_full.py",
-    "code/pipeline/adapt_fresh_mf32.py",
+    "code/pipeline/align_fresh_mf32.py",
     "code/pipeline/pack_frozen_base.py",
     "MANIFEST.sha256",
 }
@@ -109,7 +113,7 @@ def imports(path: Path) -> set[str]:
     return found
 
 
-def validate_adaptation_assets(
+def validate_alignment_assets(
     root: Path,
     manifest_relative: str,
     *,
@@ -131,7 +135,7 @@ def validate_adaptation_assets(
         or manifest.get(target_key) != target_sha256
         or not manifest.get("files")
     ):
-        raise ValueError(f"adaptation manifest contract differs: {manifest_relative}")
+        raise ValueError(f"alignment manifest contract differs: {manifest_relative}")
     directory = manifest_path.parent
     for name, record in manifest["files"].items():
         path = directory / name
@@ -140,7 +144,7 @@ def validate_adaptation_assets(
             or path.stat().st_size != record["bytes"]
             or sha256(path) != record["sha256"]
         ):
-            raise ValueError(f"adaptation asset differs: {path.relative_to(root)}")
+            raise ValueError(f"alignment asset differs: {path.relative_to(root)}")
 
 
 def decode_dataset3_q35(payload: np.ndarray) -> bytes:
@@ -200,18 +204,18 @@ def main() -> int:
     for relative, expected in audited_manifest.items():
         if sha256(root / relative) != expected:
             raise ValueError(f"manifest hash differs: {relative}")
-    validate_adaptation_assets(
+    validate_alignment_assets(
         root,
-        SCORE_ADAPTATION_MANIFEST,
-        kind="track1_b_fresh_score_residual_v1",
+        SCORE_ALIGNMENT_MANIFEST,
+        kind="track1_b_fresh_score_alignment_v1",
         source_sha256=FRESH_RESULT_SHA256,
         target_key="target_frozen_base_sha256",
         target_sha256=BASE_SHA256,
     )
-    validate_adaptation_assets(
+    validate_alignment_assets(
         root,
-        MODEL_ADAPTATION_MANIFEST,
-        kind="track1_b_fresh_mf32_parameter_residual_v1",
+        MODEL_ALIGNMENT_MANIFEST,
+        kind="track1_b_fresh_mf32_parameter_alignment_v1",
         source_sha256=FRESH_MODEL_SHA256,
         target_key="target_checkpoint_sha256",
         target_sha256=MODEL_SHA256,
@@ -250,10 +254,17 @@ def main() -> int:
                 "param__item.weight_q", "param__item.weight_scale",
                 "param__item_bias.weight_q", "param__item_bias.weight_scale",
             ]
-            if checkpoint.files != expected_model_files or str(checkpoint["kind"].item()) != expected_kind:
+            if (
+                checkpoint.files != expected_model_files
+                or str(checkpoint["kind"].item()) != expected_kind
+            ):
                 raise ValueError("quantized checkpoint kind differs")
-            source_ids = np.cumsum(checkpoint["source_ids_delta"], dtype=np.uint64).astype(np.uint32)
-            item_ids = np.cumsum(checkpoint["item_ids_delta"], dtype=np.uint64).astype(np.uint32)
+            source_ids = np.cumsum(
+                checkpoint["source_ids_delta"], dtype=np.uint64
+            ).astype(np.uint32)
+            item_ids = np.cumsum(
+                checkpoint["item_ids_delta"], dtype=np.uint64
+            ).astype(np.uint32)
             parameter_shapes = {}
             decoded_parameter_hashes = {}
             for name in ("source.weight", "item.weight", "item_bias.weight"):
@@ -297,7 +308,7 @@ def main() -> int:
         "Ubuntu 22.04",
         "CUDA 12.4",
         "Python 3.10",
-        "Jittor 1.3.11.0",
+        "Jittor 1.3.10.0",
         "python -m pip install -r requirements.txt",
         "Data boundary",
         "data_B.zip",
@@ -314,7 +325,7 @@ def main() -> int:
         "numpy==1.26.4",
         "pandas==2.2.3",
         "numba==0.66.0",
-        "jittor==1.3.11.0",
+        "jittor==1.3.10.0",
         "jittor-geometric>=0.1.0",
         "nvidia-cudnn-cu12==8.9.7.29",
         "scikit-learn==1.5.2",
@@ -331,7 +342,7 @@ def main() -> int:
         or metadata.get("external_predictions_used") is not False
         or "Ubuntu 22.04" not in metadata.get("environment", "")
         or "Python 3.10" not in metadata.get("environment", "")
-        or "Jittor 1.3.11.0" not in metadata.get("environment", "")
+        or "Jittor 1.3.10.0" not in metadata.get("environment", "")
         or "CUDA 12.4" not in metadata.get("cuda_compatibility", "")
     ):
         raise ValueError("submission metadata environment or data declaration differs")
@@ -339,6 +350,8 @@ def main() -> int:
         source = (root / launcher).read_text(encoding="utf-8")
         if "prepare_cuda_runtime.sh" not in source or "check_environment.py" not in source:
             raise ValueError(f"CUDA preparation or environment check is absent: {launcher}")
+        if 'GPU="${3:-}"' not in source or 'if [[ -n "$GPU" ]]' not in source:
+            raise ValueError(f"launcher hard-codes a host GPU index: {launcher}")
     reproduce_launcher = (root / "run_reproduce.sh").read_text(encoding="utf-8")
     if (
         "code/pipeline/reproduce_full.py" not in reproduce_launcher
@@ -365,11 +378,11 @@ def main() -> int:
         for token in (
             "reproduce.py",
             "pack_frozen_base.py",
-            "adapt_fresh_mf32.py",
+            "align_fresh_mf32.py",
             "build_submission.py",
             "b_rank.d4_implicit_mf_deploy",
-            "score_adaptation",
-            "model_adaptation",
+            "score_alignment",
+            "model_alignment",
             BASE_SHA256,
             MODEL_SHA256,
             TARGET_SHA256,

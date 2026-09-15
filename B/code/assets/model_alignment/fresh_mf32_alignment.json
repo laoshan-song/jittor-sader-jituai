@@ -67,7 +67,7 @@
       ]
     }
   },
-  "kind": "track1_b_fresh_mf32_parameter_residual_v1",
+  "kind": "track1_b_fresh_mf32_parameter_alignment_v1",
   "parameters": {
     "item.weight": {
       "q_delta": "item_weight_q_delta.xz",

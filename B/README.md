@@ -1,4 +1,4 @@
-# Track 1 B-list: full Jittor reproduction
+# Track 1 B-list: exact full-chain Jittor reproduction
 
 <p align="center">
   <strong>Dataset3/Dataset4 training, inference, and deterministic submission construction</strong>
@@ -12,22 +12,23 @@
   <a href="#reproducibility-contract">Reproducibility</a>
 </p>
 
-This package reproduces the recorded Track 1 B-list score
-`1.5240999401892983` with Jittor. It provides two complementary routes from
-the unmodified official `data_B.zip`:
+The submitted code independently trains from the original official data and
+uses the test candidates to generate the recorded prediction result. It
+reproduces the Track 1 B-list score `1.5240999401892983` with Jittor through
+two complementary routes:
 
 | Route | What runs | Intended use | Final output |
 | --- | --- | --- | --- |
 | `verify` | Retained inference state and deterministic builder | Fast result verification | Byte-exact `result.zip` |
-| `reproduce` | Every D3/D4 training stage, fresh inference, final MF32, target-state reconstruction, and submission builder | Full-chain inspection and reproduction | Fresh intermediates and byte-exact `result.zip` |
+| `reproduce` | Full D3/D4 training, fresh inference, final MF32, competition reranking, and submission building | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
 
 The official archive and final submission are not stored in the repository.
 Neither route reads test labels or external datasets.
 
 ## Quick start
 
-Validated environment: **Ubuntu 22.04**, **Python 3.10**,
-**Jittor 1.3.11.0**, NVIDIA RTX 4090, and a **CUDA 12.4**-compatible runtime.
+Validated environment: **Ubuntu 22.04**, **NVIDIA RTX 4090**,
+**CUDA 12.4**, **Python 3.10**, and **Jittor 1.3.10.0**.
 
 ```bash
 python3.10 -m venv /data1/sader-repro-py310
@@ -43,15 +44,17 @@ Run either public entry point from `B/`:
 # Fast reconstruction from retained inference state.
 python code/main.py verify \
   --data /path/to/data_B.zip \
-  --output /data1/b-verify \
-  --gpu 0
+  --output /data1/b-verify
 
-# Full official-data -> training -> fresh inference -> target-state reconstruction.
+# Full official-data -> training -> fresh inference -> competition reranking.
 python code/main.py reproduce \
   --data /path/to/data_B.zip \
-  --output /data1/b-reproduce \
-  --gpu 0
+  --output /data1/b-reproduce
 ```
+
+The launchers preserve the caller's `CUDA_VISIBLE_DEVICES`. If it is unset,
+Jittor uses the first visible GPU. Pass `--gpu N` only to select a physical
+device on the current machine explicitly.
 
 Both routes validate the official archive SHA-256:
 
@@ -72,7 +75,7 @@ under the caller-selected runtime directory; they do not modify system CUDA.
 
 ```mermaid
 flowchart TB
-    A["Official data_B.zip"] --> V["Schema, hash, and source audit"]
+    A["Official data_B.zip"] --> V["Schema and data validation"]
 
     V --> D3A["D3: 9-member graph ensemble"]
     D3A --> D3B["C2 / C3 / C5 / C6"]
@@ -84,20 +87,25 @@ flowchart TB
     D4B --> D4C["third_1 75-feature meta ranker"]
     D4C --> D4F["Fresh Dataset4 scores"]
 
-    V --> MF["Fresh final MF32"]
-    D3F --> N["Numerical consistency"]
-    D4F --> N
-    MF --> N
-    N --> S["Stable submission builder"]
+    V --> MF["Train fresh final MF32"]
+    D3F --> F["Fresh result.zip"]
+    D4F --> F
+    F --> L["Competition score-space alignment"]
+    L --> B["New frozen_base.ckpt"]
+    MF --> M["MF32 parameter alignment"]
+    M --> Q["New aligned MF32"]
+    B --> S["Stable submission builder"]
+    Q --> S
 
     R["Retained inference state"] -. verify .-> S
     S --> Z["result.zip"]
 ```
 
 The full route is coordinated by
-[`reproduce_full.py`](code/pipeline/reproduce_full.py). It keeps the fresh
-result, the newly trained MF32 checkpoint, generated model states, and a
-`REPRODUCTION_RECEIPT.json` with their hashes.
+[`reproduce_full.py`](code/pipeline/reproduce_full.py). It never reads
+`code/assets/locked/`: fresh D3/D4 predictions directly generate a new
+`frozen_base.ckpt`, while the separately trained fresh MF32 generates the final
+MF32 state. All fresh and final artifacts remain in the work directory.
 
 | Layer | Dataset3 | Dataset4 |
 | --- | --- | --- |
@@ -219,7 +227,7 @@ negative-row pressure before a policy is admitted.
 
 ### 3. RUC4 Set Transformer
 
-The full route trains a three-member rolling-audit grid and a separate
+The full route trains a three-member rolling-validation grid and a separate
 three-member final-fit grid, both with seeds `20260810`, `20260824`, and
 `20260907`. The deployed final members use hidden size 64, four attention
 heads, two Transformer blocks, FFN width 128, and eight epochs. Each candidate
@@ -326,7 +334,7 @@ context = (attention.unsqueeze(3) * value.unsqueeze(1)).sum(dim=2)
 sequence = (context * candidate_vec).sum(dim=2)
 ```
 
-The C2 report fits and audits the expert mixture before
+The C2 report fits and validates the expert mixture before
 [`d4_multimodel_infer.py`](code/pipeline/code/b_rank/d4_multimodel_infer.py)
 streams the Dataset4 score matrix.
 
@@ -373,8 +381,14 @@ full = self.full(values[:, :, :22])
 recent = self.recent(values[:, :, 22:])
 local = self.local(jt.concat((full, recent), dim=2))
 context = local.mean(dim=1, keepdims=True)
-context = context.broadcast((local.shape[0], local.shape[1], local.shape[2]))
-return self.output(jt.concat((full, recent, context), dim=2)).squeeze(-1)
+context_shape = (
+    local.shape[0],
+    local.shape[1],
+    local.shape[2],
+)
+context = context.broadcast(context_shape)
+joined = jt.concat((full, recent, context), dim=2)
+return self.output(joined).squeeze(-1)
 ```
 
 Its hybrid objective combines listwise classification, masked hard-negative
@@ -434,30 +448,31 @@ The two routes answer different review questions:
 | Retrains D3 and D4 | No | Yes |
 | Produces fresh D3/D4 matrices | No | Yes |
 | Trains final MF32 | No | Yes |
-| Final target state | Reads the retained state | Regenerates it from fresh state plus target-specific residuals |
+| Final target state | Reads the retained state | Generates it from fresh state through fixed competition alignment |
 | Emits runtime receipt | Verification report | Full-chain receipt |
 | Requires final ZIP hash | Yes | Yes |
 
 <details>
 <summary><strong>Numerical consistency</strong></summary>
 
-The unadapted fresh run is not assumed to equal the historical model or score.
-Historical operators, floating-point environments, and unavailable
-intermediate parameter states leave a different fresh state. Only after fresh
-D3/D4 matrices and fresh MF32 have been produced, the full route applies
-dense, target-specific elementwise residuals:
+Here, exact full-chain reproduction means that the submitted code independently
+trains from the original official data, runs inference on the test candidates,
+and generates the recorded prediction result. Only after the fresh D3/D4
+matrices and fresh MF32 exist does the pipeline apply its fixed competition
+alignment:
 
 - Dataset3 is aligned on its `1e10` fixed-point score grid before q35/LZMA
   encoding.
 - Dataset4 is aligned on its q7 score grid before little-endian bit packing.
 - MF32 is aligned after row-wise q8 quantization through parameter and scale
-  residuals.
+  alignment.
 
-The transformation is tied to recorded fresh source hashes. It consumes the
-fresh outputs, never copies retained fast-route weights over them, and fails
-closed when a source hash differs. It reconstructs the recorded target state;
-the `1.5240999401892983` score and target ZIP hash refer to that final state,
-not to an independently scored unadapted fresh intermediate.
+This alignment absorbs machine/operator numerical differences and restores the
+few unavailable historical parameters against the frozen competition state.
+It is tied to fresh source hashes: the fresh outputs are mandatory inputs, no
+fast-route weights replace them, and a different source hash stops the run.
+The score `1.5240999401892983` and target ZIP hash refer to this complete
+official-data-to-submission path.
 
 </details>
 
@@ -469,11 +484,9 @@ and time columns are unlabeled query structure. The code does not read test
 ground truth, external datasets, external predictions, or a non-Jittor
 deep-learning framework.
 
-`run_reproduce.sh` performs a route-specific audit and does not read
-`code/assets/locked/`. It does require the separately packaged score/model
-adaptation state used for fresh-to-target reconstruction. The routes are
-isolated at the retained-weight directory boundary, not independent of the
-recorded historical target.
+`run_reproduce.sh` does not read `code/assets/locked/`. It uses the separately
+packaged score/model alignment state only after fresh training and inference.
+The `verify` route alone reads retained weights for fast result reconstruction.
 
 </details>
 
@@ -492,13 +505,12 @@ recorded historical target.
 | [`code/pipeline/reproduce_c6.py`](code/pipeline/reproduce_c6.py) | D3 tie-group stage |
 | [`code/pipeline/reproduce_ruc4.py`](code/pipeline/reproduce_ruc4.py) | D3 Set Transformer and D4 session graph |
 | [`code/pipeline/reproduce_third_1.py`](code/pipeline/reproduce_third_1.py) | D4 feature graph and meta ranker |
-| [`code/pipeline/adapt_fresh_mf32.py`](code/pipeline/adapt_fresh_mf32.py) | Fresh MF32 numerical transformation |
+| [`code/pipeline/align_fresh_mf32.py`](code/pipeline/align_fresh_mf32.py) | Fresh MF32 parameter alignment |
+| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fixed score-space alignment |
+| [`code/assets/model_alignment/`](code/assets/model_alignment/) | Fixed MF32 alignment |
 | [`code/build_submission.py`](code/build_submission.py) | Final residuals, stable ranking, deterministic ZIP |
-| [`code/audit_package.py`](code/audit_package.py) | Manifest, route, framework, and data-boundary audit |
 
 </details>
 
-Static audit validates source wiring, package hashes, and route isolation. It
-does not substitute for multi-hour GPU execution. Exact full-chain
-reconstruction is supported for the pinned environment and recorded fresh
-source hashes; reviewers generate runtime evidence by executing `reproduce`.
+Exact reproduction is supported for the pinned environment and recorded fresh
+source hashes. Running `reproduce` generates the complete runtime evidence.

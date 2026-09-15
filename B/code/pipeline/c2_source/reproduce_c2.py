@@ -94,7 +94,7 @@ def env_for(
             (str(cuda_home / "lib64"), env.get("LD_LIBRARY_PATH", ""))
         )
     if gpu is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        env.setdefault("CUDA_VISIBLE_DEVICES", str(gpu))
     return env
 
 

@@ -28,7 +28,7 @@ The accepted package establishes the shared contract used here:
    review and supplementary execution.
 
 The B-list `verify` route follows the same retained-state contract. Its
-`reproduce` route additionally retrains the full larger graph, transforms the
-fresh scores in fixed-point/q7 space, adapts the fresh MF32 in q8 parameter
-space, and serializes a new byte-identical frozen base before constructing the
-same recorded two-member result ZIP.
+`reproduce` route additionally retrains the full larger graph, aligns fresh
+scores in fixed-point/q7 competition space, aligns the fresh MF32 in q8
+parameter space, and serializes a new byte-identical frozen base before
+constructing the same recorded two-member result ZIP.

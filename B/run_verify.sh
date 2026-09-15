@@ -5,10 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 DATA="${1:?usage: run_verify.sh data_B.zip output-dir [gpu]}"
 OUT="${2:?usage: run_verify.sh data_B.zip output-dir [gpu]}"
-GPU="${3:-0}"
+GPU="${3:-}"
 
 "$PYTHON" "$ROOT/code/audit_package.py" "$ROOT"
-export CUDA_VISIBLE_DEVICES="$GPU" JT_USE_CUDA=1
+if [[ -n "$GPU" ]]; then
+  export CUDA_VISIBLE_DEVICES="$GPU"
+fi
+export JT_USE_CUDA=1
 export use_cutt=0 use_cutlass=0 use_nccl=0 use_mkl=0
 export JITTOR_HOME="${JITTOR_HOME:-$(dirname "$OUT")/.jittor-cache}"
 export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$(dirname "$OUT")/.pycache}"
