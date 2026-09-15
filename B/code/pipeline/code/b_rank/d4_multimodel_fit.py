@@ -20,6 +20,7 @@ from . import (
     implicit_mf_jittor,
     pairnew_transformer_jittor,
     pool_association,
+    replay_score_cache,
     temporal_attention_jittor,
     temporal_history,
     verify_run,
@@ -588,6 +589,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     group_metadata = {}
     pool_activity = {}
     for strategy, groups in strategy_groups.items():
+        if args.score_only_strategy and strategy != args.score_only_strategy:
+            continue
         group_metadata[strategy] = groups.metadata
         for split, group in (("validation", groups.valid), ("confirmation", groups.confirm)):
             names, scores, labels, seen, segments, activity, static_features = _score_group(
@@ -601,7 +604,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 test_counts=test_counts,
                 transition_index=transition_indexes[split],
                 batch_rows=int(args.batch_rows),
-                include_static_features=bool(args.pairnew_transformer),
+                include_static_features=bool(
+                    args.pairnew_transformer or args.score_cache_only
+                ),
             )
             scored[(strategy, split)] = (
                 scores,
@@ -611,6 +616,42 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 static_features,
             )
             pool_activity.setdefault(strategy, {})[split] = activity
+
+    if args.score_cache_only:
+        if args.score_cache_dir is None or args.score_only_strategy is None:
+            raise ValueError(
+                "--score-cache-only requires --score-cache-dir and "
+                "--score-only-strategy"
+            )
+        cache_metadata = {
+            "data_sha256": verify_run.EXPECTED_DATA_SHA256,
+            "group_seed": int(args.group_seed),
+            "group_metadata": group_metadata,
+            "pool_activity": pool_activity,
+            "temporal_models": temporal_records,
+            "mf_models": mf_records,
+            "transition_mf_models": transition_mf_records,
+            "source_hashes": {
+                Path(__file__).name: _sha256(Path(__file__).resolve()),
+                Path(replay_score_cache.__file__).name: _sha256(
+                    Path(replay_score_cache.__file__).resolve()
+                ),
+            },
+        }
+        cache_manifest = replay_score_cache.save(
+            args.score_cache_dir, scored, names, cache_metadata
+        )
+        report = {
+            "kind": "d4_multimodel_replay_score_cache_build_v1",
+            "decision": "PASS",
+            "cache_dir": str(args.score_cache_dir.resolve()),
+            "cache_kind": cache_manifest["kind"],
+            "entries": sorted(cache_manifest["entries"]),
+            "component_names": names,
+            **cache_metadata,
+        }
+        _atomic_json(run_dir / "research_report.json", report)
+        return report
 
     if args.pairnew_transformer:
         if args.control_fit is None:
@@ -652,6 +693,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 .isoformat(),
                 "data_sha256": verify_run.EXPECTED_DATA_SHA256,
                 "component_names": names,
+                "group_seed": int(args.group_seed),
                 "group_metadata": group_metadata,
                 "pool_activity": pool_activity,
                 "temporal_models": temporal_records,
@@ -833,10 +875,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "gate_trace": control_gate_trace,
             "metrics": control_reports,
             "checks": control_checks,
+            "group_seed": int(args.group_seed),
             "group_metadata": group_metadata,
             "pool_activity": pool_activity,
             "temporal_models": temporal_records,
             "mf_models": mf_records,
+            "transition_mf_models": transition_mf_records,
             "runtime": {
                 "jittor": str(temporal_attention_jittor.jt.__version__),
                 "has_cuda": bool(temporal_attention_jittor.jt.has_cuda),
@@ -987,6 +1031,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--control-only",
         action="store_true",
         help="fit and publish only the non-innovation causal control",
+    )
+    parser.add_argument("--score-cache-only", action="store_true")
+    parser.add_argument("--score-cache-dir", type=Path)
+    parser.add_argument(
+        "--score-only-strategy", choices=("history", "test_pool")
     )
     parser.add_argument("--pairnew-baseline-report", type=Path)
     parser.add_argument("--control-fit", type=Path)

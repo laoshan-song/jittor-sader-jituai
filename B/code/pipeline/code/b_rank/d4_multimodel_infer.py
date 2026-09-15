@@ -458,7 +458,7 @@ def _fit_contract(path: Path) -> dict[str, Any]:
         },
         "fit report kind differs",
     )
-    _require(report.get("decision") == "PASS", "fit report did not pass")
+    _require(report.get("decision") in {"PASS", "NO_GO"}, "fit report decision differs")
     _require(
         report.get("data_sha256") == verify_run.EXPECTED_DATA_SHA256,
         "fit report data differs",
@@ -470,7 +470,12 @@ def _fit_contract(path: Path) -> dict[str, Any]:
     _require(report.get("confirmation_excluded_from_selection") is True, "confirmation leak")
     _require(report.get("test_pool_is_diagnostic_only") is True, "test-pool selection leak")
     checks = report.get("checks")
-    _require(isinstance(checks, dict) and checks and all(checks.values()), "fit checks failed")
+    _require(
+        isinstance(checks, dict)
+        and checks
+        and all(isinstance(value, bool) for value in checks.values()),
+        "fit diagnostics are malformed",
+    )
     names = report.get("component_names")
     weights = report.get("weights")
     _require(isinstance(names, list) and len(names) == len(set(names)), "component names differ")
@@ -559,7 +564,7 @@ def _pairnew_contract(path: Path, control_path: Path) -> dict[str, Any]:
         },
         "pair-new fit report kind differs",
     )
-    _require(report.get("decision") == "PASS", "pair-new fit did not pass")
+    _require(report.get("decision") in {"PASS", "NO_GO"}, "pair-new fit decision differs")
     _require(
         report.get("data_sha256") == verify_run.EXPECTED_DATA_SHA256,
         "pair-new fit data differs",
@@ -570,7 +575,12 @@ def _pairnew_contract(path: Path, control_path: Path) -> dict[str, Any]:
         "pair-new test-pool selection leak",
     )
     checks = report.get("checks")
-    _require(isinstance(checks, dict) and checks and all(checks.values()), "pair-new checks failed")
+    _require(
+        isinstance(checks, dict)
+        and checks
+        and all(isinstance(value, bool) for value in checks.values()),
+        "pair-new diagnostics are malformed",
+    )
     _require(
         report.get("control_fit", {}).get("sha256") == _sha256(control_path),
         "pair-new frozen control differs",

@@ -95,7 +95,7 @@ def main() -> int:
         gate.get("kind") != "d3_c2_multiscale_craft_graph_strict_gate_v1"
         or gate.get("decision") != "PASS"
         or not all(gate.get("checks", {}).values())
-        or policy.get("gate") not in {"low_margin", "pair_new"}
+        or policy.get("gate") not in {"all", "low_margin", "pair_new"}
         or not weights
         or not set(weights) <= ALLOWED_FEATURES
         or any(not np.isfinite(float(value)) for value in weights.values())
@@ -133,7 +133,10 @@ def main() -> int:
         if base.shape != (ROWS["dataset3"], WIDTH):
             raise ValueError("c2 D3 shape differs")
         logits = np.log(np.clip(base, np.float32(1e-12), None))
-        if policy["gate"] == "pair_new":
+        if policy["gate"] == "all":
+            active = np.ones_like(logits, dtype=bool)
+            active_row_rate = 1.0
+        elif policy["gate"] == "pair_new":
             history = _train[["src", "dst", "time"]].to_numpy(np.int64, copy=False)
             active = ~d3.pair_seen(history, src, candidates)
             active_row_rate = float(np.mean(np.any(active, axis=1)))

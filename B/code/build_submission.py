@@ -43,8 +43,9 @@ RANK_GRID = np.linspace(1.0, 0.0, WIDTH, dtype=np.float32)
 class FrozenBase:
     """Read either the legacy ZIP or the locked NumPy checkpoint container."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, verify_locked: bool = True):
         self.path = path
+        self.verify_locked = verify_locked
         self.archive = None
         self.payload: dict[str, bytes] = {}
 
@@ -58,7 +59,9 @@ class FrozenBase:
                 archive.close()
                 raise ValueError("frozen checkpoint members differ")
             self.payload = {
-                "dataset3.csv": decode_dataset3_q35(archive["dataset3_q35_lzma"]),
+                "dataset3.csv": decode_dataset3_q35(
+                    archive["dataset3_q35_lzma"], verify_locked=self.verify_locked
+                ),
                 Q7_D4_MEMBER: np.asarray(archive["dataset4_q7"], dtype=np.uint8).tobytes(),
             }
             archive.close()
@@ -82,7 +85,7 @@ class FrozenBase:
             raise KeyError(f"frozen checkpoint member differs: {name}") from exc
 
 
-def decode_dataset3_q35(payload: np.ndarray) -> bytes:
+def decode_dataset3_q35(payload: np.ndarray, *, verify_locked: bool = True) -> bytes:
     count = D3_ROWS * WIDTH
     plane_bytes = (count + 7) // 8
     encoded = lzma.decompress(np.asarray(payload, dtype=np.uint8).tobytes())
@@ -102,7 +105,9 @@ def decode_dataset3_q35(payload: np.ndarray) -> bytes:
         fmt="%.10f",
     )
     csv = buffer.getvalue()
-    if len(csv) != D3_BASE_BYTES or hashlib.sha256(csv).hexdigest() != D3_BASE_SHA256:
+    if verify_locked and (
+        len(csv) != D3_BASE_BYTES or hashlib.sha256(csv).hexdigest() != D3_BASE_SHA256
+    ):
         raise ValueError("Dataset3 q35 decoded CSV differs")
     return csv
 
@@ -208,7 +213,7 @@ def main() -> int:
     try:
         with (
             zipfile.ZipFile(args.data) as official,
-            FrozenBase(args.base) as base,
+            FrozenBase(args.base, verify_locked=not args.unlocked) as base,
             zipfile.ZipFile(
                 temporary,
                 "x",

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -96,6 +97,34 @@ def run(command: list[str], cwd: Path, env: dict[str, str], log: Path) -> None:
         )
 
 
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def run_stage(
+    *,
+    resume: bool,
+    expected: tuple[Path, ...],
+    cleanup: tuple[Path, ...],
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    log: Path,
+) -> bool:
+    if resume and all(path.exists() for path in expected):
+        print("SKIP", " ".join(str(path) for path in expected), flush=True)
+        return False
+    if resume:
+        for path in cleanup:
+            remove_path(path)
+        log.unlink(missing_ok=True)
+    run(command, cwd, env, log)
+    return True
+
+
 def run_parallel(
     jobs: list[tuple[list[str], dict[str, str], Path]], cwd: Path
 ) -> None:
@@ -157,11 +186,19 @@ def train_d3_members(
     fit_splits: tuple[str, ...],
     gpus: list[int],
 ) -> tuple[list[Path], list[Path]]:
-    destination.mkdir(parents=True)
+    destination.mkdir(parents=True, exist_ok=args.resume)
     models = [destination / f"seed{seed}.pkl" for seed in SEEDS_D3]
     reports = [destination / f"seed{seed}.json" for seed in SEEDS_D3]
     jobs = []
     for index, (seed, model, report) in enumerate(zip(SEEDS_D3, models, reports)):
+        log = work / "logs" / f"d3_{destination.name}_{seed}.log"
+        if args.resume and model.is_file() and report.is_file():
+            print("SKIP", model, report, flush=True)
+            continue
+        if args.resume:
+            model.unlink(missing_ok=True)
+            report.unlink(missing_ok=True)
+            log.unlink(missing_ok=True)
         command = [
             sys.executable, str(RUC3_CODE / "d3_set_transformer_v49.py"),
             "--data", str(args.data), "--code", str(D3_CODE),
@@ -176,9 +213,10 @@ def train_d3_members(
         jobs.append((
             command,
             runtime_env(args, work, gpus[index % len(gpus)]),
-            work / "logs" / f"d3_{destination.name}_{seed}.log",
+            log,
         ))
-    run_parallel(jobs, RUC3_CODE)
+    if jobs:
+        run_parallel(jobs, RUC3_CODE)
     return models, reports
 
 
@@ -192,8 +230,11 @@ def build_d3_assets(
         args, work, ensemble, work / "d3_rolling", ("meta_train", "validation"), gpus
     )
     direct_audit = work / "reports" / "d3_v65_rolling_audit.json"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(direct_audit,),
+        cleanup=(direct_audit,),
+        command=[
             sys.executable, str(RUC3_CODE / "formal_direct_set_v53.py"),
             "--data", str(args.data), "--code", str(D3_CODE),
             "--ensemble-report", str(ensemble),
@@ -203,11 +244,16 @@ def build_d3_assets(
             "--seed", "20260810", "--split", "both", "--aggregation", "mean_member",
             "--minimum-direct-delta", "0.008",
         ],
-        RUC3_CODE, runtime_env(args, work, gpus[0]), work / "logs" / "d3_direct_audit.log",
+        cwd=RUC3_CODE,
+        env=runtime_env(args, work, gpus[0]),
+        log=work / "logs" / "d3_direct_audit.log",
     )
     duplicate_audit = work / "reports" / "d3_duplicate_group_audit.json"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(duplicate_audit,),
+        cleanup=(duplicate_audit,),
+        command=[
             sys.executable, str(RUC3_CODE / "d3_duplicate_group_audit.py"),
             "--data", str(args.data), "--code", str(D3_CODE),
             "--ensemble-report", str(ensemble),
@@ -216,7 +262,9 @@ def build_d3_assets(
             "--output", str(duplicate_audit), "--groups", "30000", "--batch", "128",
             "--seed", "20260810", "--split", "both", "--aggregation", "mean_member",
         ],
-        RUC3_CODE, runtime_env(args, work, gpus[0]), work / "logs" / "d3_duplicate_audit.log",
+        cwd=RUC3_CODE,
+        env=runtime_env(args, work, gpus[0]),
+        log=work / "logs" / "d3_duplicate_audit.log",
     )
     final_models, final_reports = train_d3_members(
         args, work, ensemble, work / "d3_final",
@@ -235,18 +283,24 @@ def train_d4_members(
     replay = work / "d4_replay"
     control_report = c2_work / "d4_control" / "research_report.json"
     for strategy in ("history", "test_pool"):
-        run(
-            [
+        output_cache = replay / strategy
+        run_dir = work / f"d4_replay_build_{strategy}"
+        run_stage(
+            resume=args.resume,
+            expected=(output_cache / "manifest.json",),
+            cleanup=(output_cache, run_dir),
+            command=[
                 sys.executable, str(RUC3_CODE / "build_large_cache.py"),
                 "--source-manifest", str(control_report), "--data", str(args.data),
                 "--cache-dir", str(c2_work / "cache"),
-                "--run-dir", str(work / f"d4_replay_build_{strategy}"),
-                "--output-cache", str(replay / strategy), "--strategy", strategy,
+                "--run-dir", str(run_dir),
+                "--output-cache", str(output_cache), "--strategy", strategy,
                 "--valid-groups", "120000", "--confirm-groups", "30000",
                 "--batch-rows", "512",
             ],
-            RUC3_CODE, runtime_env(args, work, gpus[0]),
-            work / "logs" / f"d4_replay_{strategy}.log",
+            cwd=RUC3_CODE,
+            env=runtime_env(args, work, gpus[0]),
+            log=work / "logs" / f"d4_replay_{strategy}.log",
         )
     replay_args = [
         "--replay-cache", str(replay / "history"),
@@ -257,30 +311,49 @@ def train_d4_members(
         "--score-cache", str(replay / "test_pool"),
     ]
     identity = work / "d4_identity"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(identity / "manifest.json",),
+        cleanup=(identity,),
+        command=[
             sys.executable, str(RUC3_CODE / "build_identity_cache_v33.py"),
             "--data", str(args.data), "--data-cache", str(c2_work / "cache"),
             *score_cache_args, "--output", str(identity),
         ],
-        RUC3_CODE, runtime_env(args, work, gpus[0]), work / "logs" / "d4_identity.log",
+        cwd=RUC3_CODE,
+        env=runtime_env(args, work, gpus[0]),
+        log=work / "logs" / "d4_identity.log",
     )
     baseline = work / "d4_baseline"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(baseline / "manifest.json",),
+        cleanup=(baseline,),
+        command=[
             sys.executable, str(RUC3_CODE / "build_baseline_cache.py"),
             *replay_args, "--control-fit", str(control_report),
             "--pairnew-report", str(c2_work / "d4_pairnew" / "research_report.json"),
             "--output", str(baseline), "--batch", "256",
         ],
-        RUC3_CODE, runtime_env(args, work, gpus[0]), work / "logs" / "d4_baseline.log",
+        cwd=RUC3_CODE,
+        env=runtime_env(args, work, gpus[0]),
+        log=work / "logs" / "d4_baseline.log",
     )
     train_cache = d4_cache_root(c2_work)
     jobs = []
     model_paths = []
     for index, seed in enumerate(SEEDS_D4):
         run_dir = work / "d4_models" / f"seed{seed}"
-        model_paths.append(run_dir / "model.npz")
+        model = run_dir / "model.npz"
+        report = run_dir / "report.json"
+        model_paths.append(model)
+        log = work / "logs" / f"d4_train_{seed}.log"
+        if args.resume and model.is_file() and report.is_file():
+            print("SKIP", model, report, flush=True)
+            continue
+        if args.resume:
+            remove_path(run_dir)
+            log.unlink(missing_ok=True)
         jobs.append((
             [
                 sys.executable, str(RUC3_CODE / "session_graph_hard_ranker.py"),
@@ -290,9 +363,10 @@ def train_d4_members(
                 "--chunk", "1024", "--seed", str(seed),
             ],
             runtime_env(args, work, gpus[index % len(gpus)]),
-            work / "logs" / f"d4_train_{seed}.log",
+            log,
         ))
-    run_parallel(jobs, RUC3_CODE)
+    if jobs:
+        run_parallel(jobs, RUC3_CODE)
     leakage = work / "reports" / "d4_session_graph_leakage_audit.json"
     command = [
         sys.executable, str(RUC3_CODE / "session_graph_leakage_audit.py"),
@@ -302,17 +376,29 @@ def train_d4_members(
     for model in model_paths:
         command += ["--model", str(model)]
     command += ["--output", str(leakage), "--alpha", "0.01"]
-    run(
-        command, RUC3_CODE, runtime_env(args, work, gpus[0]),
-        work / "logs" / "d4_leakage_audit.log",
+    run_stage(
+        resume=args.resume,
+        expected=(leakage,),
+        cleanup=(leakage,),
+        command=command,
+        cwd=RUC3_CODE,
+        env=runtime_env(args, work, gpus[0]),
+        log=work / "logs" / "d4_leakage_audit.log",
     )
     return model_paths
 
 
-def split_member(archive: Path, output: Path, count: int) -> list[Path]:
-    output.mkdir(parents=True)
+def split_member(
+    archive: Path, output: Path, count: int, *, resume: bool = False
+) -> list[Path]:
     boundaries = [ROWS["dataset4.csv"] * index // count for index in range(count + 1)]
     paths = [output / f"dataset4_base_{index}.csv" for index in range(count)]
+    if resume and all(path.is_file() for path in paths):
+        print("SKIP", " ".join(str(path) for path in paths), flush=True)
+        return paths
+    if resume:
+        remove_path(output)
+    output.mkdir(parents=True)
     handles = [path.open("xb") for path in paths]
     written = [0] * count
     try:
@@ -387,8 +473,11 @@ def main() -> int:
 
     v65 = work / "v65.zip"
     v65_report = work / "reports" / "v65_build.json"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(v65, v65_report),
+        cleanup=(v65, v65_report),
+        command=[
             sys.executable, str(RUC3_CODE / "build_set_transformer_submission_v65.py"),
             "--data", str(args.data), "--code", str(D3_CODE),
             "--ensemble-report", str(ensemble), "--validation-report", str(direct_audit),
@@ -398,11 +487,15 @@ def main() -> int:
             "--report-output", str(v65_report), "--batch", "128",
             "--allow-reproduced-base",
         ],
-        RUC3_CODE, env, work / "logs" / "build_v65.log",
+        cwd=RUC3_CODE,
+        env=env,
+        log=work / "logs" / "build_v65.log",
     )
 
     shard_count = len(gpus)
-    base_shards = split_member(v65, work / "d4_base_shards", shard_count)
+    base_shards = split_member(
+        v65, work / "d4_base_shards", shard_count, resume=args.resume
+    )
     train_cache = d4_cache_root(c2_work)
     feature_store = train_cache / "stats" / "history_lt_1512137910"
     if not feature_store.is_dir():
@@ -410,6 +503,13 @@ def main() -> int:
     output_shards = [work / "d4_ruc2_shards" / f"dataset4_shard_{i}.csv" for i in range(shard_count)]
     jobs = []
     for index, (gpu, source, output) in enumerate(zip(gpus, base_shards, output_shards)):
+        log = work / "logs" / f"d4_deploy_{index}.log"
+        if args.resume and output.is_file():
+            print("SKIP", output, flush=True)
+            continue
+        if args.resume:
+            output.unlink(missing_ok=True)
+            log.unlink(missing_ok=True)
         command = [
             sys.executable, str(RUC3_CODE / "session_graph_deploy.py"),
             "--data", str(args.data), "--train-cache", str(train_cache),
@@ -420,8 +520,9 @@ def main() -> int:
         ]
         for model in d4_models:
             command += ["--model", str(model)]
-        jobs.append((command, runtime_env(args, work, gpu), work / "logs" / f"d4_deploy_{index}.log"))
-    run_parallel(jobs, RUC3_CODE)
+        jobs.append((command, runtime_env(args, work, gpu), log))
+    if jobs:
+        run_parallel(jobs, RUC3_CODE)
 
     ruc2_zip = work / "b_ruc2.zip"
     package_command = [
@@ -433,47 +534,72 @@ def main() -> int:
     package_command += [
         "--output", str(ruc2_zip), "--report", str(work / "reports" / "ruc2_build.json")
     ]
-    run(package_command, RUC3_CODE, env, work / "logs" / "build_ruc2.log")
+    ruc2_report = work / "reports" / "ruc2_build.json"
+    run_stage(
+        resume=args.resume,
+        expected=(ruc2_zip, ruc2_report),
+        cleanup=(ruc2_zip, ruc2_report),
+        command=package_command,
+        cwd=RUC3_CODE,
+        env=env,
+        log=work / "logs" / "build_ruc2.log",
+    )
 
     ruc3_output = work / "ruc3.zip"
-    run(
-        [
+    ruc3_report = work / "reports" / "ruc3_build.json"
+    built_ruc3 = run_stage(
+        resume=args.resume,
+        expected=(ruc3_output, ruc3_report),
+        cleanup=(ruc3_output, ruc3_report),
+        command=[
             sys.executable, str(RUC3_CODE / "build_b_candidate.py"),
             "--data", str(args.data), "--code", str(D3_CODE),
             "--ensemble-report", str(ensemble), "--validation-report", str(duplicate_audit),
             "--transformer-model", *map(str, d3_models),
             "--transformer-report", *map(str, d3_reports),
             "--base", str(ruc2_zip), "--output", str(ruc3_output),
-            "--report-output", str(work / "reports" / "ruc3_build.json"),
+            "--report-output", str(ruc3_report),
             "--batch", "128",
         ],
-        RUC3_CODE, env, work / "logs" / "build_ruc3.log",
+        cwd=RUC3_CODE,
+        env=env,
+        log=work / "logs" / "build_ruc3.log",
     )
-    run(
+    if built_ruc3:
+        (work / "logs" / "verify_ruc3.log").unlink(missing_ok=True)
+        run(
         [
             sys.executable, str(C2_CODE / "verify_v26_submission.py"),
             "--data", str(args.data), "--submission", str(ruc3_output),
         ],
         C2_ROOT, env, work / "logs" / "verify_ruc3.log",
-    )
+        )
     output = work / "ruc4.zip"
-    run(
-        [
+    ruc4_report = work / "reports" / "ruc4_rp3_build.json"
+    built_ruc4 = run_stage(
+        resume=args.resume,
+        expected=(output, ruc4_report),
+        cleanup=(output, ruc4_report),
+        command=[
             sys.executable, str(RUC4_CODE / "build_d4_rp3_candidate.py"),
             "--data", str(args.data), "--data-cache", str(train_cache),
             "--base", str(ruc3_output), "--output", str(output),
-            "--report", str(work / "reports" / "ruc4_rp3_build.json"),
+            "--report", str(ruc4_report),
             "--threads", str(min(48, os.cpu_count() or 1)),
         ],
-        RUC4_CODE, env, work / "logs" / "build_ruc4.log",
+        cwd=RUC4_CODE,
+        env=env,
+        log=work / "logs" / "build_ruc4.log",
     )
-    run(
+    if built_ruc4:
+        (work / "logs" / "verify_ruc4.log").unlink(missing_ok=True)
+        run(
         [
             sys.executable, str(C2_CODE / "verify_v26_submission.py"),
             "--data", str(args.data), "--submission", str(output),
         ],
         C2_ROOT, env, work / "logs" / "verify_ruc4.log",
-    )
+        )
     receipt = {
         "kind": "ruc4_end_to_end_reproduction_receipt_v1",
         "decision": "PASS",

@@ -252,7 +252,10 @@ def main() -> int:
         feature_names, feature_values, "cross_900_3600",
         cross_3600_past + cross_3600_future - cross_900_past - cross_900_future,
     )
-    if feature_names != list(payloads[0]["feature_names"]) or len(feature_names) != 87:
+    if (
+        feature_names != list(payloads[0]["feature_names"])
+        or len(feature_names) != int(payloads[0]["input_dim"])
+    ):
         raise ValueError("official feature inventory differs")
 
     duplicate_rows = np.any(

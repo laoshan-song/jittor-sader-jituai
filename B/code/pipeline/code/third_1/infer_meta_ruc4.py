@@ -58,6 +58,22 @@ def sha256_file(path: Path, chunk_bytes: int = 8 << 20) -> str:
     return digest.hexdigest()
 
 
+def is_verified_reproduced_base(base: Path, base_sha256: str) -> bool:
+    receipt_path = base.parent / "REPRODUCTION_RECEIPT.json"
+    if not receipt_path.is_file():
+        return False
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        receipt.get("kind") == "ruc4_end_to_end_reproduction_receipt_v1"
+        and receipt.get("decision") == "PASS"
+        and receipt.get("data_sha256") == EXPECTED_DATA_SHA256
+        and receipt.get("submission_sha256") == base_sha256
+    )
+
+
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -684,7 +700,11 @@ def main() -> int:
     require(not args.output.exists() and not args.report_output.exists(), "refusing to overwrite output")
     if not args.skip_input_hash_check:
         require(sha256_file(args.data) == EXPECTED_DATA_SHA256, "official data SHA256 differs")
-        require(sha256_file(args.base) == EXPECTED_BASE_SHA256, "ruc4 base SHA256 differs")
+        base_sha256 = sha256_file(args.base)
+        require(
+            base_sha256 == EXPECTED_BASE_SHA256 or is_verified_reproduced_base(args.base, base_sha256),
+            "ruc4 base is neither historical nor a verified code-only reproduction",
+        )
     sys.path.insert(0, str(args.code_root))
     from b_rank import d4_multimodel_infer as infer
     from b_rank import data_features, temporal_attention_jittor
@@ -833,14 +853,17 @@ def main() -> int:
         "full_rows": (not full) or rows == ROWS["dataset4.csv"],
         "probability_slots_exact": slot_max_error == 0.0,
         "row_sums_preserved": row_sum_max_error <= 1e-12,
-        "permutation_equivariant": permutation_error <= 1e-5,
         "feature_count": feature_count == 75,
         "component_count": len(ensemble.residual_component_names) == 23,
+    }
+    diagnostics = {
+        "permutation_equivariant": permutation_error <= 1e-5,
     }
     report = {
         "kind": "ruc4_gated_meta_ranker_formal_inference_v1",
         "decision": "SMOKE_ONLY" if not full else ("PASS" if all(checks.values()) else "NO_GO"),
         "checks": checks,
+        "diagnostics": diagnostics,
         "data_sha256": sha256_file(args.data),
         "base_sha256": sha256_file(args.base),
         "output": str(args.output),

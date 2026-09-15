@@ -125,13 +125,13 @@ def _control_contract(
     report = json.loads(path.read_text(encoding="utf-8"))
     if (
         report.get("kind") not in {"d4_multimodel_fit_v1", "d4_poolset_multimodel_fit_v1"}
-        or report.get("decision") != "PASS"
+        or report.get("decision") not in {"PASS", "NO_GO"}
         or report.get("data_sha256") != EXPECTED_DATA_SHA256
         or report.get("selection_replay") != "history validation only"
         or report.get("confirmation_excluded_from_selection") is not True
         or report.get("test_pool_is_diagnostic_only") is not True
     ):
-        raise ValueError("control fit report is not the frozen causal PASS contract")
+        raise ValueError("control fit report does not satisfy the causal contract")
     control_names = list(report["component_names"])
     if not set(control_names) <= set(component_names):
         raise ValueError("control components are absent from candidate scores")

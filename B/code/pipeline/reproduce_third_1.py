@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +63,34 @@ def run(command: list[str], cwd: Path, env: dict[str, str], log: Path) -> None:
     print("RUN", " ".join(command), flush=True)
     with log.open("x", encoding="utf-8") as handle:
         subprocess.run(command, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT, check=True)
+
+
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def run_stage(
+    *,
+    resume: bool,
+    expected: tuple[Path, ...],
+    cleanup: tuple[Path, ...],
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    log: Path,
+) -> bool:
+    if resume and all(path.exists() for path in expected):
+        print("SKIP", " ".join(str(path) for path in expected), flush=True)
+        return False
+    if resume:
+        for path in cleanup:
+            remove_path(path)
+        log.unlink(missing_ok=True)
+    run(command, cwd, env, log)
+    return True
 
 
 def temporal_args(report: Path) -> list[str]:
@@ -150,8 +179,11 @@ def main() -> int:
 
     deploy_history = work / "deploy_history"
     deploy_testpool = work / "deploy_testpool"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(deploy_history / "deploy_report.json",),
+        cleanup=(deploy_history,),
+        command=[
             sys.executable,
             "-m",
             "b_rank.d4_temporal_deploy",
@@ -190,12 +222,15 @@ def main() -> int:
             "--batch-rows",
             "256",
         ],
-        CODE,
-        env,
-        logs / "02_deploy_history_temporal.log",
+        cwd=CODE,
+        env=env,
+        log=logs / "02_deploy_history_temporal.log",
     )
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(deploy_testpool / "deploy_report.json",),
+        cleanup=(deploy_testpool,),
+        command=[
             sys.executable,
             "-m",
             "b_rank.d4_testpool_temporal_deploy",
@@ -214,16 +249,19 @@ def main() -> int:
             "--batch-rows",
             "256",
         ],
-        CODE,
-        env,
-        logs / "03_deploy_testpool_temporal.log",
+        cwd=CODE,
+        env=env,
+        log=logs / "03_deploy_testpool_temporal.log",
     )
 
     mf_reports = []
     for seed in (20260810, 20260811, 20260812):
         run_dir = work / f"deploy_mf_{seed}"
-        run(
-            [
+        run_stage(
+            resume=args.resume,
+            expected=(run_dir / "deploy_report.json",),
+            cleanup=(run_dir,),
+            command=[
                 sys.executable,
                 "-m",
                 "b_rank.d4_implicit_mf_deploy",
@@ -244,15 +282,18 @@ def main() -> int:
                 "--batch-rows",
                 "4096",
             ],
-            CODE,
-            env,
-            logs / f"04_deploy_mf_{seed}.log",
+            cwd=CODE,
+            env=env,
+            log=logs / f"04_deploy_mf_{seed}.log",
         )
         mf_reports.append((f"fullhistory_mf_seed{str(seed)[-2:]}", run_dir / "deploy_report.json"))
 
     transition = work / "deploy_transition_mf_20260812"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(transition / "deploy_report.json",),
+        cleanup=(transition,),
+        command=[
             sys.executable,
             "-m",
             "b_rank.d4_transition_mf_deploy",
@@ -273,9 +314,9 @@ def main() -> int:
             "--batch-rows",
             "4096",
         ],
-        CODE,
-        env,
-        logs / "05_deploy_transition_mf.log",
+        cwd=CODE,
+        env=env,
+        log=logs / "05_deploy_transition_mf.log",
     )
 
     history_report = deploy_history / "deploy_report.json"
@@ -295,19 +336,36 @@ def main() -> int:
     for name, report in mf_reports:
         fit_common += ["--mf", name, checkpoint(report)]
     fit_common += ["--transition-mf", "transition_mf_seed12", checkpoint(transition / "deploy_report.json")]
-    run(
-        [*fit_common, "--control-only", "--run-dir", str(control_fit), "--valid-groups", "60000", "--confirm-groups", "30000", "--batch-rows", "512"],
-        CODE,
-        env,
-        logs / "06_fit_control.log",
+    run_stage(
+        resume=args.resume,
+        expected=(control_fit / "research_report.json",),
+        cleanup=(control_fit,),
+        command=[
+            *fit_common,
+            "--control-only",
+            "--run-dir",
+            str(control_fit),
+            "--valid-groups",
+            "60000",
+            "--confirm-groups",
+            "30000",
+            "--batch-rows",
+            "512",
+        ],
+        cwd=CODE,
+        env=env,
+        log=logs / "06_fit_control.log",
     )
     control_report = control_fit / "research_report.json"
     pairnew = work / "pairnew_fit"
     pair_members = []
     for hidden, seed in ((64, 20260815), (64, 20260816), (64, 20260817), (96, 20260818), (96, 20260819), (96, 20260820)):
         pair_members += ["--residual-member", str(hidden), str(seed)]
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(pairnew / "research_report.json",),
+        cleanup=(pairnew,),
+        command=[
             *fit_common,
             "--pairnew-transformer",
             "--control-fit",
@@ -328,16 +386,24 @@ def main() -> int:
             "--batch-rows",
             "512",
         ],
-        CODE,
-        env,
-        logs / "07_fit_pairnew.log",
+        cwd=CODE,
+        env=env,
+        log=logs / "07_fit_pairnew.log",
     )
     pair_report = pairnew / "research_report.json"
 
     replay = work / "meta_replay"
     for strategy in ("history", "test_pool"):
-        run(
-            [
+        replay_run = work / f"meta_replay_build_{strategy}"
+        replay_cache = replay / strategy
+        run_stage(
+            resume=args.resume,
+            expected=(
+                replay_run / "research_report.json",
+                replay_cache / "manifest.json",
+            ),
+            cleanup=(replay_run, replay_cache),
+            command=[
                 sys.executable,
                 str(RUC3 / "build_large_cache.py"),
                 "--source-manifest",
@@ -347,9 +413,9 @@ def main() -> int:
                 "--cache-dir",
                 str(cache),
                 "--run-dir",
-                str(work / f"meta_replay_build_{strategy}"),
+                str(replay_run),
                 "--output-cache",
-                str(replay / strategy),
+                str(replay_cache),
                 "--strategy",
                 strategy,
                 "--valid-groups",
@@ -359,13 +425,16 @@ def main() -> int:
                 "--batch-rows",
                 "512",
             ],
-            RUC3,
-            env,
-            logs / f"08_replay_{strategy}.log",
+            cwd=RUC3,
+            env=env,
+            log=logs / f"08_replay_{strategy}.log",
         )
     identity = work / "meta_identity"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(identity / "manifest.json",),
+        cleanup=(identity,),
+        command=[
             sys.executable,
             str(RUC3 / "build_identity_cache_v33.py"),
             "--data",
@@ -379,13 +448,16 @@ def main() -> int:
             "--output",
             str(identity),
         ],
-        RUC3,
-        env,
-        logs / "09_identity.log",
+        cwd=RUC3,
+        env=env,
+        log=logs / "09_identity.log",
     )
     baseline = work / "meta_pairnew_baseline"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(baseline / "manifest.json",),
+        cleanup=(baseline,),
+        command=[
             sys.executable,
             str(RUC3 / "build_baseline_cache.py"),
             "--replay-cache",
@@ -399,13 +471,16 @@ def main() -> int:
             "--output",
             str(baseline),
         ],
-        RUC3,
-        env,
-        logs / "10_baseline_cache.log",
+        cwd=RUC3,
+        env=env,
+        log=logs / "10_baseline_cache.log",
     )
     ruc4_fixed = work / "meta_ruc4_fixed_cache"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(ruc4_fixed / "manifest.json",),
+        cleanup=(ruc4_fixed,),
+        command=[
             sys.executable,
             str(THIRD / "build_ruc4_fixed_cache.py"),
             "--rp3-code",
@@ -423,13 +498,20 @@ def main() -> int:
             "--threads",
             str(min(48, os.cpu_count() or 1)),
         ],
-        THIRD,
-        env,
-        logs / "11_ruc4_fixed_cache.log",
+        cwd=THIRD,
+        env=env,
+        log=logs / "11_ruc4_fixed_cache.log",
     )
     side = work / "meta_side"
-    run(
-        [
+    side_maps = work / "meta_side_maps"
+    run_stage(
+        resume=args.resume,
+        expected=(
+            side / "hierarchy" / "metadata.json",
+            side / "neighbor" / "manifest.json",
+        ),
+        cleanup=(side, side_maps),
+        command=[
             sys.executable,
             str(THIRD / "build_meta_side_features.py"),
             "--train-cache",
@@ -441,15 +523,18 @@ def main() -> int:
             "--neighbor-output",
             str(side / "neighbor"),
             "--map-cache",
-            str(work / "meta_side_maps"),
+            str(side_maps),
         ],
-        THIRD,
-        env,
-        logs / "12_meta_side_features.log",
+        cwd=THIRD,
+        env=env,
+        log=logs / "12_meta_side_features.log",
     )
     meta_features = work / "meta_features"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(meta_features / "metadata.json",),
+        cleanup=(meta_features,),
+        command=[
             sys.executable,
             str(THIRD / "build_meta_feature_cache.py"),
             "--hierarchy-cache",
@@ -463,13 +548,16 @@ def main() -> int:
             "--output",
             str(meta_features),
         ],
-        THIRD,
-        env,
-        logs / "13_meta_feature_cache.log",
+        cwd=THIRD,
+        env=env,
+        log=logs / "13_meta_feature_cache.log",
     )
     meta_model = work / "meta_model_h96_s20260822"
-    run(
-        [
+    run_stage(
+        resume=args.resume,
+        expected=(meta_model / "model.npz", meta_model / "report.json"),
+        cleanup=(meta_model,),
+        command=[
             sys.executable,
             str(THIRD / "train_hierarchy_jittor.py"),
             "--feature-cache",
@@ -495,12 +583,16 @@ def main() -> int:
             "--seed",
             "20260822",
         ],
-        THIRD,
-        env,
-        logs / "14_train_meta.log",
+        cwd=THIRD,
+        env=env,
+        log=logs / "14_train_meta.log",
     )
-    run(
-        [
+    meta_gate_report = work / "meta_gate_report.json"
+    run_stage(
+        resume=args.resume,
+        expected=(meta_gate_report,),
+        cleanup=(meta_gate_report,),
+        command=[
             sys.executable,
             str(THIRD / "evaluate_gated_meta.py"),
             "--code-root",
@@ -516,15 +608,15 @@ def main() -> int:
             "--model",
             str(meta_model / "model.npz"),
             "--output",
-            str(work / "meta_gate_report.json"),
+            str(meta_gate_report),
             "--train-rows",
             "70000",
             "--selection-rows",
             "30000",
         ],
-        THIRD,
-        env,
-        logs / "15_evaluate_meta_gate.log",
+        cwd=THIRD,
+        env=env,
+        log=logs / "15_evaluate_meta_gate.log",
     )
 
     output = work / "result.zip"
@@ -573,7 +665,15 @@ def main() -> int:
     ]
     for name, report in mf_reports:
         infer += ["--mf-report", name, str(report)]
-    run(infer, THIRD, env, logs / "16_infer_third_1.log")
+    run_stage(
+        resume=args.resume,
+        expected=(output, final_report),
+        cleanup=(output, final_report, work / "meta_formal_maps"),
+        command=infer,
+        cwd=THIRD,
+        env=env,
+        log=logs / "16_infer_third_1.log",
+    )
     final = json.loads(final_report.read_text(encoding="utf-8"))
     receipt = {
         "kind": "third_1_code_only_reproduction_receipt_v1",

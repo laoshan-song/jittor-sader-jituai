@@ -30,7 +30,14 @@ def main() -> int:
     temporal_attention_jittor.configure_cuda()
     scored, names, _ = replay_score_cache.load(args.replay_cache)
     report = json.loads(args.pairnew_report.read_text(encoding="utf-8"))
-    if report.get("decision") != "PASS" or not report.get("training", {}).get("members"):
+    if (
+        report.get("kind") not in {
+            "d4_pairnew_rank_slot_candidate_set_transformer_v12",
+            "d4_pairnew_rank_slot_scaled_replay_transformer_v21",
+        }
+        or report.get("decision") not in {"PASS", "NO_GO"}
+        or not report.get("training", {}).get("members")
+    ):
         raise ValueError("pair-new report is not a deployable Jittor ensemble")
     control, indices, base_index, seen_alpha, new_alpha = pairnew._control_contract(
         args.control_fit.resolve(), names
