@@ -470,6 +470,20 @@ def main() -> int:
         args, work, ensemble, gpus
     )
     d4_models = train_d4_members(args, work, c2_work, gpus)
+    d4_diagnostics = {
+        "session_graph": {
+            path.parent.name: json.loads(
+                (path.parent / "report.json").read_text(encoding="utf-8")
+            )["decision"]
+            for path in d4_models
+        },
+        "leakage": json.loads(
+            (work / "reports" / "d4_session_graph_leakage_audit.json").read_text(
+                encoding="utf-8"
+            )
+        )["decision"],
+        "role": "recorded diagnostics; deployment uses the freshly trained models",
+    }
 
     v65 = work / "v65.zip"
     v65_report = work / "reports" / "v65_build.json"
@@ -609,6 +623,7 @@ def main() -> int:
         "exact_historical_sha": sha256(output) == ONLINE_SHA256,
         "ruc3_base_sha256": sha256(ruc3_output),
         "final_models": "freshly trained from official data",
+        "d4_diagnostics": d4_diagnostics,
         "neural_framework": "Jittor",
     }
     (work / "REPRODUCTION_RECEIPT.json").write_text(

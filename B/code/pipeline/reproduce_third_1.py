@@ -689,6 +689,20 @@ def main() -> int:
         "mf_embedding_dim": args.mf_embedding_dim,
         "mf_negative_count": args.mf_negative_count,
         "mf_epochs": args.mf_epochs,
+        "meta_diagnostics": {
+            "training": json.loads(
+                (meta_model / "report.json").read_text(encoding="utf-8")
+            )["decision"],
+            "row_gate": json.loads(
+                meta_gate_report.read_text(encoding="utf-8")
+            )["decision"],
+            "role": "recorded diagnostics; formal inference uses the pinned deployment policy",
+        },
+        "meta_deployment_policy": {
+            "scale": 0.2,
+            "threshold": 0.08892796039581305,
+            "keep_same_top1": True,
+        },
         "final_report": str(final_report),
         "output": str(output),
     }

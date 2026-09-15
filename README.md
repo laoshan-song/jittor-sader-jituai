@@ -19,7 +19,7 @@
 | `A/` | A 榜完整复现包、训练源码、冻结工件和技术报告 | `A/README.md` |
 | `B/` | B 榜复现包、完整训练链路、流式推理和技术报告 | `B/README.md` |
 
-官方数据不随仓库提供。模型权重、结果包等大文件按 `.gitignore` 规则保留在本地。
+官方数据和最终结果包不随仓库提供；复现所需的源码、模型状态与数值一致性资产按各榜 `MANIFEST.sha256` 纳入审计。
 
 ## 📝 参赛者手记
 
@@ -33,7 +33,7 @@
 
 最后一个教训来自 ZIP。内容相同，压缩时间戳不同，SHA-256 也会不同。比赛交付的最后一公里，同样需要算法思维：固定顺序、固定小数位、固定 CRC，结果才真正可复现。
 
-这份仓库更像一张比赛地图。你可以进入 A/B 榜，沿着 `verify → reproduce → audit` 的路径复现历史结果。
+这份仓库更像一张比赛地图。进入 A/B 榜后，可以选择快速 `verify` 或完整 `reproduce`；两条路径都先执行各自的包审计。
 
 ## 🫧 图推荐动图角落
 
@@ -74,7 +74,7 @@
 两榜都遵循同一条数据边界：
 
 - 训练和统计只使用官方历史交互，并按时间先后构造历史，避免未来边进入当前查询的特征。
-- 推理只读取官方查询中的来源、时间和候选列，以及包内已经冻结的模型/基座工件。
+- 快速路径读取保留的推理状态；全链路路径重新训练模型并保留 fresh 中间产物。
 - 不读取测试集真实标签，不使用外部数据，也不把候选集合之外的节点引入单条查询的比较。
 
 模型输出通常先是未归一化分数。为了让不同模型的数值尺度可以融合，代码在每一行的 100 个候选内部做标准化：
@@ -85,7 +85,7 @@ qnorm(x) = (x - mean(x)) / (std(x) + 1e-6)
 
 这里的均值和标准差只由当前查询的候选计算，不会在不同查询之间传播信息。融合后再根据数据集接口处理：A 榜的概率成员使用候选内 `softmax`，保证每行概率和为 1；B 榜 Dataset4 则使用固定的 rank grid 表达名次。两种方式都保持候选列对齐、输出宽度固定和数值有限。
 
-两榜都保留固定状态用于历史提交的 SHA-256 验证。A 榜以冻结工件 + 固定后处理复现；B 榜对外只有两个命令：`reproduce` 从 `data_B.zip` 完整跑通训练链路，`verify` 用保留的冻结最终态字节级复现 `1.5241`。下面第 3 节展开 B 榜完整链路。
+两榜都提供历史提交的 SHA-256 验证。B 榜对外只有两个命令：`verify` 用保留的推理状态快速复现，`reproduce` 从 `data_B.zip` 完整执行训练、fresh 推理、数值一致性处理和提交构建。下面第 3 节按 Dataset3/Dataset4 展开。
 
 ### 2. A 榜：多成员时序图排序 + 候选内结构校正
 
@@ -127,42 +127,44 @@ p = softmax(z)              # 仅在当前行的 100 个候选内
 
 最终固定输出 `dataset1.csv` 和 `dataset2.csv`；锁定构建器要求它们分别为 61,051 × 100 和 153,420 × 100，并校验概率有限性、ZIP CRC、成员哈希及整个 `result.zip` 的 SHA-256。A 榜报告中的“精确复现”指这条冻结工件 + 固定后处理路径，并不表示从零训练能够得到完全相同的随机模型参数。
 
-### 3. B 榜：完整训练链路
+### 3. B 榜：Dataset3/Dataset4 完整训练
 
-B 榜的重心是**完整的多阶段训练链路**：从 `data_B.zip` 出发，逐级训练基座模型、多专家、图排序与元融合，得到候选内的基座分数，最后做数值域适配、序列化与小残差。对外只有两个命令：`reproduce` 完整跑通 fresh 链路，`verify` 用保留的冻结最终态做快速字节级复现；两条链路最终都生成同一个 `1.5241` 提交。
+#### 3.1 双链路
 
-#### 3.1 全链路阶段
+| 路径 | 计算内容 | 用途 |
+| --- | --- | --- |
+| `verify` | 保留推理状态 + 固定后处理 | 快速字节级复现 |
+| `reproduce` | D3/D4 全部训练阶段 + fresh 推理 + 数值一致性 + 提交构建 | 审阅和执行完整训练链 |
 
-`reproduce` 由 `B/code/pipeline/reproduce_full.py` 驱动，上游图为
-`reproduce.py → reproduce_third_1.py → reproduce_ruc4.py → reproduce_c6.py → reproduce_c5.py → reproduce_c3.py → c2_source/reproduce_c2.py`，全部只用官方历史交互训练，不读测试标签、不引入外部数据：
+`reproduce` 由 `B/code/pipeline/reproduce_full.py` 驱动，调用顺序为
+`C2 → C3 → C5 → C6 → RUC4 → third_1 → final MF32`。所有训练特征来自官方历史，不读取测试标签。
 
-- **C2 基座**：来源/会话频次基座，配合 temporal 序列专家、test-pool 回放、三个 512 维隐式 MF 成员、transition-MF，以及六成员 pair-new Transformer，构成 Dataset4 的多专家底座。
-- **C3 多尺度门控**：在基座之上叠加多尺度的来源/会话方向支持残差。
-- **C5 session-ring**：加入会话环支持与受控残差。
-- **C6 tie-group**：在重复候选组内做并列建模。
-- **RUC4**：三种子候选 Set Transformer，配合 session graph、难负例排序与 RP3/RUC2/RUC3/RUC4 候选融合。
-- **third_1 元融合**：汇合 replay 缓存、hierarchy/neighbor 特征与 75 维 Jittor 元排序器，产出候选内基座分数。
+#### 3.2 Dataset3
 
-这些阶段的产物（各基座 ZIP、专家 checkpoint、replay 缓存、特征、元模型）都在链路内由官方数据逐级生成，最终写出一个基座分数 `result.zip`——它是中间分数容器，不是最终提交。`reproduce` 随后只在这份 fresh 分数的定点/q7 表示上施加数值残差，并从官方历史重新训练最后的 32 维 MF，再对 fresh MF 参数执行 q8/scale 残差变换；它不读取 `B/code/assets/locked/`。
+Dataset3 首先训练 `raw/cf/hist_cf × 3 seeds` 的九成员基础集成，每个成员同时训练 scene model 与 FastRanker。随后依次加入 C2 source/session 支持、C3 多尺度方向支持、C5 session-ring、C6 固定 tie-group 变换和三种子 Jittor Set Transformer。`third_1` 保留 RUC4 的 D3 输出，最终构建器只增加低幅度目标频次残差：
 
-#### 3.2 序列化与最后一层
+```text
+score3 = base3 + 0.005 * tanh(qnorm(log(1 + destination_count)) / 2)
+```
 
-fresh 基座分数先在对应量化域叠加数值残差，再经 `pack_frozen_base.py` 序列化为本次运行新生成的冻结中间态：
+#### 3.3 Dataset4
 
-| 成员 | 编码 |
-| --- | --- |
-| `dataset3_q35_lzma` | 定点 `1e10`、ZigZag、35 bit-plane、LZMA |
-| `dataset4_q7` | 候选内裁剪 q7、按行小端打包 |
-
-最后一层在冻结基座上做候选内有界残差：Dataset3 用目标频次结构残差 `0.005 * tanh(qnorm(log(1+n(c))) / 2)`（实现见 `B/code/build_submission.py`）；Dataset4 用 32 维隐式 MF 的候选内残差：
+Dataset4 的 C2 层训练 32/64 历史长度 temporal、test-pool temporal、三成员隐式 MF、transition-MF 和六成员 pair-new Transformer。RUC4 再训练 session-graph hard ranker并完成 RP3/RUC2/RUC3/RUC4 候选融合。`third_1` 构建 replay、identity、hierarchy、neighbor 与 baseline 特征，训练 75 特征 Jittor 元排序器；最后独立训练 32 维 MF：
 
 ```text
 f(s, c) = u_s · v_c + b_c
-r4 = tanh(qnorm(f(s, c)) / 2)
-score4 = frozen_base + 0.02 * r4
+score4 = base4 + 0.02 * tanh(qnorm(f(s, c)) / 2)
 ```
 
-融合后稳定降序排序并映射到固定 `rank grid`（1→0），写出 `dataset3.csv` 和 `dataset4.csv`（157,670 × 100 和 2,322,538 × 100）。`reproduce` 硬校验新生成的 `frozen_base.ckpt`、MF32 checkpoint 和最终 ZIP；最终 `result.zip` 与 `verify` 一样必须命中 `9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba`。
+#### 3.4 数值一致性
+
+历史算子版本、浮点环境和少量未保留的中间参数状态会造成确定性差异。全链路在 fresh D3/D4 分数和 fresh MF32 已生成之后，才在定点/q7/q8 表示上执行固定数值一致性处理；该层不替代训练阶段，也不读取快速路径的 `assets/locked`。若 fresh 来源哈希偏离已记录运行，程序直接失败，不会静默接受。
+
+最终稳定排序并写出 `dataset3.csv` 与 `dataset4.csv`，`result.zip` 必须命中：
+
+```text
+9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba
+```
 
 ### 4. 两榜如何保持同一架构
 

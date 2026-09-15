@@ -29,6 +29,7 @@ BASE_PARTS = tuple(
     for suffix in ("aa", "ab", "ac", "ad")
 )
 MODEL_PATH = "code/assets/locked/d4_implicit_mf32.npz"
+LOCKED_FILES = {*BASE_PARTS, MODEL_PATH}
 SCORE_ADAPTATION_MANIFEST = "code/assets/score_adaptation/fresh_score_residual.json"
 MODEL_ADAPTATION_MANIFEST = "code/assets/model_adaptation/fresh_mf32_residual.json"
 FRESH_RESULT_SHA256 = "dfff58258428fde2e5c581edeeb4edf644079e16ee35cc463c9c9fbe825fb233"
@@ -167,10 +168,17 @@ def decode_dataset3_q35(payload: np.ndarray) -> bytes:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
+    parser.add_argument(
+        "--route",
+        choices=("all", "reproduce"),
+        default="all",
+        help="reproduce audits the full-chain route without reading locked assets",
+    )
     args = parser.parse_args()
     root = args.root.resolve()
     files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
-    missing = sorted(REQUIRED - files)
+    required = REQUIRED if args.route == "all" else REQUIRED - LOCKED_FILES
+    missing = sorted(required - files)
     if missing:
         raise ValueError(f"required files missing: {missing}")
     if any(name in files for name in ("result.zip", "data_B.zip", "dataset3.csv", "dataset4.csv")):
@@ -179,10 +187,17 @@ def main() -> int:
     for line in (root / "MANIFEST.sha256").read_text(encoding="utf-8").splitlines():
         digest, relative = line.split("  ", 1)
         manifest[relative] = digest
-    expected_manifest_files = files - {"MANIFEST.sha256"}
-    if set(manifest) != expected_manifest_files:
+    expected_manifest_files = files - {"MANIFEST.sha256"} - (
+        LOCKED_FILES if args.route == "reproduce" else set()
+    )
+    audited_manifest = {
+        relative: digest
+        for relative, digest in manifest.items()
+        if args.route == "all" or relative not in LOCKED_FILES
+    }
+    if set(audited_manifest) != expected_manifest_files:
         raise ValueError("manifest file set differs")
-    for relative, expected in manifest.items():
+    for relative, expected in audited_manifest.items():
         if sha256(root / relative) != expected:
             raise ValueError(f"manifest hash differs: {relative}")
     validate_adaptation_assets(
@@ -201,75 +216,76 @@ def main() -> int:
         target_key="target_checkpoint_sha256",
         target_sha256=MODEL_SHA256,
     )
-    if sha256(root / MODEL_PATH) != MODEL_SHA256:
-        raise ValueError("Jittor checkpoint hash differs")
-    with restored_frozen_base(root) as frozen_base, np.load(
-        frozen_base, allow_pickle=False
-    ) as archive:
-        if archive.files != ["kind", "dataset3_q35_lzma", "dataset4_q7"]:
-            raise ValueError("frozen checkpoint members differ")
-        if str(archive["kind"].item()) != "track1_b_frozen_score_q7_d3q35_v1":
-            raise ValueError("frozen checkpoint kind differs")
-        d3_q35 = np.asarray(archive["dataset3_q35_lzma"], dtype=np.uint8)
-        d4 = np.asarray(archive["dataset4_q7"], dtype=np.uint8)
-        d3 = decode_dataset3_q35(d3_q35)
-        expected_size = len(Q7_D4_MAGIC) + ROWS * WIDTH * 7 // 8
-        if (
-            d3_q35.ndim != 1
-            or len(d3) != D3_BASE_BYTES
-            or hashlib.sha256(d3).hexdigest() != D3_BASE_SHA256
-            or d4.ndim != 1
-            or d4.size != expected_size
-            or hashlib.sha256(d4.tobytes()).hexdigest() != Q7_D4_SHA256
-        ):
-            raise ValueError("frozen checkpoint payload size differs")
-        if d4[: len(Q7_D4_MAGIC)].tobytes() != Q7_D4_MAGIC:
-            raise ValueError("packed Dataset4 base magic differs")
-    with np.load(root / MODEL_PATH, allow_pickle=False) as checkpoint:
-        expected_kind = f"d4_implicit_mf_q{MODEL_BITS}row_v1"
-        expected_model_files = [
-            "kind", "source_count", "item_count", "embedding_dim",
-            "source_ids_delta", "item_ids_delta",
-            "param__source.weight_q", "param__source.weight_scale",
-            "param__item.weight_q", "param__item.weight_scale",
-            "param__item_bias.weight_q", "param__item_bias.weight_scale",
-        ]
-        if checkpoint.files != expected_model_files or str(checkpoint["kind"].item()) != expected_kind:
-            raise ValueError("quantized checkpoint kind differs")
-        source_ids = np.cumsum(checkpoint["source_ids_delta"], dtype=np.uint64).astype(np.uint32)
-        item_ids = np.cumsum(checkpoint["item_ids_delta"], dtype=np.uint64).astype(np.uint32)
-        parameter_shapes = {}
-        decoded_parameter_hashes = {}
-        for name in ("source.weight", "item.weight", "item_bias.weight"):
-            quantized = np.asarray(checkpoint[f"param__{name}_q"])
-            scale = np.asarray(checkpoint[f"param__{name}_scale"])
-            qmax = (1 << (MODEL_BITS - 1)) - 1
+    if args.route == "all":
+        if sha256(root / MODEL_PATH) != MODEL_SHA256:
+            raise ValueError("Jittor checkpoint hash differs")
+        with restored_frozen_base(root) as frozen_base, np.load(
+            frozen_base, allow_pickle=False
+        ) as archive:
+            if archive.files != ["kind", "dataset3_q35_lzma", "dataset4_q7"]:
+                raise ValueError("frozen checkpoint members differ")
+            if str(archive["kind"].item()) != "track1_b_frozen_score_q7_d3q35_v1":
+                raise ValueError("frozen checkpoint kind differs")
+            d3_q35 = np.asarray(archive["dataset3_q35_lzma"], dtype=np.uint8)
+            d4 = np.asarray(archive["dataset4_q7"], dtype=np.uint8)
+            d3 = decode_dataset3_q35(d3_q35)
+            expected_size = len(Q7_D4_MAGIC) + ROWS * WIDTH * 7 // 8
             if (
-                quantized.dtype != np.int8
-                or scale.dtype != np.float32
-                or int(quantized.min()) < -qmax
-                or int(quantized.max()) > qmax
-                or not np.isfinite(scale).all()
-                or np.any(scale < 0)
+                d3_q35.ndim != 1
+                or len(d3) != D3_BASE_BYTES
+                or hashlib.sha256(d3).hexdigest() != D3_BASE_SHA256
+                or d4.ndim != 1
+                or d4.size != expected_size
+                or hashlib.sha256(d4.tobytes()).hexdigest() != Q7_D4_SHA256
             ):
-                raise ValueError("quantized checkpoint dtype differs")
-            decoded = quantized.astype(np.float32) * scale
-            parameter_shapes[name] = list(decoded.shape)
-            decoded_parameter_hashes[name] = hashlib.sha256(decoded.tobytes()).hexdigest()
-        if parameter_shapes != {
-            "source.weight": [680641, 32],
-            "item.weight": [862247, 32],
-            "item_bias.weight": [862247, 1],
-        }:
-            raise ValueError("checkpoint parameter shapes differ")
-        if (
-            decoded_parameter_hashes != MODEL_DECODED_SHA256
-            or len(source_ids) + 1 != int(checkpoint["source_count"].item())
-            or len(item_ids) + 1 != int(checkpoint["item_count"].item())
-            or not np.all(source_ids[1:] > source_ids[:-1])
-            or not np.all(item_ids[1:] > item_ids[:-1])
-        ):
-            raise ValueError("quantized checkpoint decode differs")
+                raise ValueError("frozen checkpoint payload size differs")
+            if d4[: len(Q7_D4_MAGIC)].tobytes() != Q7_D4_MAGIC:
+                raise ValueError("packed Dataset4 base magic differs")
+        with np.load(root / MODEL_PATH, allow_pickle=False) as checkpoint:
+            expected_kind = f"d4_implicit_mf_q{MODEL_BITS}row_v1"
+            expected_model_files = [
+                "kind", "source_count", "item_count", "embedding_dim",
+                "source_ids_delta", "item_ids_delta",
+                "param__source.weight_q", "param__source.weight_scale",
+                "param__item.weight_q", "param__item.weight_scale",
+                "param__item_bias.weight_q", "param__item_bias.weight_scale",
+            ]
+            if checkpoint.files != expected_model_files or str(checkpoint["kind"].item()) != expected_kind:
+                raise ValueError("quantized checkpoint kind differs")
+            source_ids = np.cumsum(checkpoint["source_ids_delta"], dtype=np.uint64).astype(np.uint32)
+            item_ids = np.cumsum(checkpoint["item_ids_delta"], dtype=np.uint64).astype(np.uint32)
+            parameter_shapes = {}
+            decoded_parameter_hashes = {}
+            for name in ("source.weight", "item.weight", "item_bias.weight"):
+                quantized = np.asarray(checkpoint[f"param__{name}_q"])
+                scale = np.asarray(checkpoint[f"param__{name}_scale"])
+                qmax = (1 << (MODEL_BITS - 1)) - 1
+                if (
+                    quantized.dtype != np.int8
+                    or scale.dtype != np.float32
+                    or int(quantized.min()) < -qmax
+                    or int(quantized.max()) > qmax
+                    or not np.isfinite(scale).all()
+                    or np.any(scale < 0)
+                ):
+                    raise ValueError("quantized checkpoint dtype differs")
+                decoded = quantized.astype(np.float32) * scale
+                parameter_shapes[name] = list(decoded.shape)
+                decoded_parameter_hashes[name] = hashlib.sha256(decoded.tobytes()).hexdigest()
+            if parameter_shapes != {
+                "source.weight": [680641, 32],
+                "item.weight": [862247, 32],
+                "item_bias.weight": [862247, 1],
+            }:
+                raise ValueError("checkpoint parameter shapes differ")
+            if (
+                decoded_parameter_hashes != MODEL_DECODED_SHA256
+                or len(source_ids) + 1 != int(checkpoint["source_count"].item())
+                or len(item_ids) + 1 != int(checkpoint["item_count"].item())
+                or not np.all(source_ids[1:] > source_ids[:-1])
+                or not np.all(item_ids[1:] > item_ids[:-1])
+            ):
+                raise ValueError("quantized checkpoint decode differs")
     source_imports = set().union(*(imports(path) for path in (root / "code").glob("*.py")))
     if "jittor" not in source_imports:
         raise ValueError("Jittor import is absent")
@@ -277,7 +293,7 @@ def main() -> int:
     required_readme_text = (
         "verify",
         "reproduce",
-        "Frozen algorithm",
+        "Numerical consistency",
         "Ubuntu 22.04",
         "CUDA 12.4",
         "Python 3.10",
@@ -307,6 +323,9 @@ def main() -> int:
     metadata = json.loads((root / "submission_metadata.json").read_text(encoding="utf-8"))
     if (
         metadata.get("official_data_only") is not True
+        or metadata.get("official_training_data_only") is not True
+        or metadata.get("packaged_reproducibility_state") is not True
+        or metadata.get("target_specific_alignment") is not True
         or metadata.get("test_ground_truth_used") is not False
         or metadata.get("external_data_used") is not False
         or metadata.get("external_predictions_used") is not False
@@ -321,8 +340,25 @@ def main() -> int:
         if "prepare_cuda_runtime.sh" not in source or "check_environment.py" not in source:
             raise ValueError(f"CUDA preparation or environment check is absent: {launcher}")
     reproduce_launcher = (root / "run_reproduce.sh").read_text(encoding="utf-8")
-    if "code/pipeline/reproduce_full.py" not in reproduce_launcher:
+    if (
+        "code/pipeline/reproduce_full.py" not in reproduce_launcher
+        or "--route reproduce" not in reproduce_launcher
+    ):
         raise ValueError("full-chain launcher does not invoke the reconstruction driver")
+    full_chain_paths = [
+        root / "run_reproduce.sh",
+        root / "code/main.py",
+        root / "code/build_submission.py",
+        root / "code/model.py",
+        *(root / "code/pipeline").rglob("*.py"),
+        *(root / "code/pipeline").rglob("*.sh"),
+    ]
+    for path in full_chain_paths:
+        source = path.read_text(encoding="utf-8")
+        if "assets/locked" in source or "restore_locked_assets.py" in source:
+            raise ValueError(
+                f"full-chain source references locked assets: {path.relative_to(root)}"
+            )
     full_source = (root / "code/pipeline/reproduce_full.py").read_text(encoding="utf-8")
     if any(
         token not in full_source
@@ -349,32 +385,34 @@ def main() -> int:
         )
     ):
         raise ValueError("full-chain route must not restore locked weights")
-    locked_launcher = (root / "run_verify.sh").read_text(encoding="utf-8")
-    if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
-        raise ValueError("frozen final-layer route does not restore tracked assets")
+    if args.route == "all":
+        locked_launcher = (root / "run_verify.sh").read_text(encoding="utf-8")
+        if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
+            raise ValueError("frozen final-layer route does not restore tracked assets")
     reference = (root / "A_LIST_REFERENCE.md").read_text(encoding="utf-8")
     if A_REFERENCE_SHA256 not in reference:
         raise ValueError("A-list reference is incomplete")
     report = {
         "decision": "PASS",
+        "audit_route": args.route,
         "file_count": len(files),
-        "base_sha256": BASE_SHA256,
-        "frozen_base_path": "restored from code/assets/locked/frozen_base.ckpt.part*",
-        "checkpoint_sha256": MODEL_SHA256,
+        "locked_asset_contents_read": args.route == "all",
         "final_result_packaged": False,
         "official_data_packaged": False,
-        "official_data_only_declared": True,
-        "test_ground_truth_used": False,
-        "external_data_used": False,
-        "external_predictions_used": False,
+        "official_training_data_only_declared": True,
+        "packaged_reproducibility_state_declared": True,
+        "target_specific_alignment_declared": True,
+        "test_ground_truth_used_declared": False,
+        "external_data_used_declared": False,
+        "external_predictions_used_declared": False,
         "target_environment": metadata["environment"],
         "cuda_compatibility": metadata["cuda_compatibility"],
-        "full_chain_present": True,
+        "full_chain_static_wiring_present": True,
         "full_chain_restores_locked_weights": False,
-        "full_chain_generates_exact_base": True,
-        "full_chain_generates_exact_model": True,
-        "full_chain_result_sha256": TARGET_SHA256,
-        "locked_result_sha256": TARGET_SHA256,
+        "full_chain_target_base_sha256": BASE_SHA256,
+        "full_chain_target_model_sha256": MODEL_SHA256,
+        "full_chain_target_result_sha256": TARGET_SHA256,
+        "verify_target_result_sha256": TARGET_SHA256,
     }
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

@@ -324,7 +324,22 @@ def main() -> int:
     if built_final:
         (logs / "verify_c2.log").unlink(missing_ok=True)
         run([sys.executable, str(ROOT / "code" / "verify_v26_submission.py"), "--data", str(data), "--submission", str(final)], ROOT, aenv, logs / "verify_c2.log")
-    receipt = {"kind": "b_rank_d34_c2_reproduction_receipt_v1", "decision": "SMOKE_ONLY" if args.quick else "PASS", "data_sha256": DATA_SHA256, "submission_sha256": sha256(final), "quick": bool(args.quick), "d3_policy": json.loads(gate.read_text())["fixed_policy"], "d4_control_report": str(control_report), "d4_pairnew_report": str(pair_report), "gate_report": str(gate)}
+    receipt = {
+        "kind": "b_rank_d34_c2_reproduction_receipt_v1",
+        "decision": "SMOKE_ONLY" if args.quick else "PASS",
+        "data_sha256": DATA_SHA256,
+        "submission_sha256": sha256(final),
+        "quick": bool(args.quick),
+        "d3_policy": json.loads(gate.read_text())["fixed_policy"],
+        "d4_control_report": str(control_report),
+        "d4_pairnew_report": str(pair_report),
+        "d4_diagnostics": {
+            "control": json.loads(control_report.read_text())["decision"],
+            "pairnew": json.loads(pair_report.read_text())["decision"],
+            "role": "recorded diagnostics; formal inference uses the fitted reports",
+        },
+        "gate_report": str(gate),
+    }
     (work / "REPRODUCTION_RECEIPT.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
