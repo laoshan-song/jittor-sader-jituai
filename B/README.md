@@ -20,7 +20,7 @@ two complementary routes:
 | Route | What runs | Intended use | Final output |
 | --- | --- | --- | --- |
 | `verify` | Retained inference state and deterministic builder | Fast result verification | Byte-exact `result.zip` |
-| `reproduce` | Full D3/D4 training, fresh inference, fresh-result reranking, final MF32, and submission building | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
+| `reproduce` | Full D3/D4 training, fresh inference, frozen-base alignment, final MF32, and residual reranking | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
 
 The official archive and final submission are not stored in the repository.
 Neither route reads test labels or external datasets.
@@ -46,7 +46,7 @@ python code/main.py verify \
   --data /path/to/data_B.zip \
   --output /data1/b-verify
 
-# Full official-data -> fresh inference -> reranking -> frozen-state alignment.
+# Full official-data -> fresh inference -> aligned base -> MF32 reranking.
 python code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /data1/b-reproduce
@@ -90,22 +90,24 @@ flowchart TB
     V --> MF["Train fresh final MF32"]
     D3F --> F["Fresh result.zip"]
     D4F --> F
-    F --> L["Rerank the fresh scores"]
+    F --> L["Align fresh score grids"]
     L --> B["New frozen_base.ckpt"]
     MF --> M["MF32 parameter alignment"]
-    M --> Q["New aligned MF32"]
-    B --> S["Stable submission builder"]
-    Q --> S
+    M --> Q["MF32 residual scores"]
+    B --> R["Base + 0.02 bounded MF32 residual"]
+    Q --> R
+    R --> S["Stable rank-grid serialization"]
 
-    R["Retained inference state"] -. verify .-> S
+    K["Retained inference state"] -. verify .-> R
     S --> Z["result.zip"]
 ```
 
 The full route is coordinated by
 [`reproduce_full.py`](code/pipeline/reproduce_full.py). It never reads
 `code/assets/locked/`: fresh D3/D4 predictions directly generate a new
-`frozen_base.ckpt`, while the separately trained fresh MF32 generates the final
-MF32 state. All fresh and final artifacts remain in the work directory.
+`frozen_base.ckpt`. The separately trained and aligned MF32 then contributes
+only the bounded `0.02` residual used to rerank that base. All fresh and final
+artifacts remain in the work directory.
 
 | Layer | Dataset3 | Dataset4 |
 | --- | --- | --- |
@@ -415,7 +417,8 @@ produces the fresh Dataset4 base rather than a detached diagnostic artifact.
 ### 4. Final MF32 and rank serialization
 
 An independent 32-dimensional implicit-MF member is trained after the fresh
-D3/D4 result:
+D3/D4 result. It does not replace the aligned frozen base; it performs the
+final small-scale reranking on top of that base:
 
 ```math
 f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c.
@@ -448,7 +451,7 @@ The two routes answer different review questions:
 | Retrains D3 and D4 | No | Yes |
 | Produces fresh D3/D4 matrices | No | Yes |
 | Trains final MF32 | No | Yes |
-| Final target state | Reads the retained state | Reranks fresh scores to generate the aligned frozen base |
+| Final target state | Reads retained base + MF32 | Generates aligned base, then reranks it with MF32 residual |
 | Emits runtime receipt | Verification report | Full-chain receipt |
 | Requires final ZIP hash | Yes | Yes |
 
@@ -457,22 +460,22 @@ The two routes answer different review questions:
 
 Here, exact full-chain reproduction means that the submitted code independently
 trains from the original official data, runs inference on the test candidates,
-and generates the recorded prediction result. Only after the fresh D3/D4
-matrices and fresh MF32 exist does the pipeline rerank and align those fresh
-outputs:
+and generates the recorded prediction result. The two numerical steps remain
+separate:
 
 - Dataset3 is aligned on its `1e10` fixed-point score grid before q35/LZMA
   encoding.
 - Dataset4 is aligned on its q7 score grid before little-endian bit packing.
-- MF32 is aligned after row-wise q8 quantization through parameter and scale
-  alignment.
+- Missing MF32 parameters are aligned after row-wise q8 quantization.
+- The aligned MF32 scores are added to the frozen base with weight `0.02`,
+  followed by a stable candidate-local reranking.
 
-The fresh-result reranking absorbs machine/operator numerical differences so
-that the newly generated base exactly matches the frozen checkpoint. The few
-unavailable historical MF32 parameters are aligned in the same way. Both steps
-are tied to fresh source hashes: fresh outputs are mandatory inputs, no
-fast-route weights replace them, and a different source hash stops the run.
-The score `1.5240999401892983` and target ZIP hash refer to this complete
+Score-grid alignment absorbs machine/operator numerical differences so the
+fresh result generates the recorded frozen checkpoint. Parameter alignment
+restores the few unavailable historical MF32 values. MF32 then performs its
+original role: a small residual reranking over that checkpoint. Both alignment
+steps are tied to fresh source hashes; no fast-route weight replaces a fresh
+output. The score `1.5240999401892983` and target ZIP hash refer to this complete
 official-data-to-submission path.
 
 </details>
@@ -507,7 +510,7 @@ The `verify` route alone reads retained weights for fast result reconstruction.
 | [`code/pipeline/reproduce_ruc4.py`](code/pipeline/reproduce_ruc4.py) | D3 Set Transformer and D4 session graph |
 | [`code/pipeline/reproduce_third_1.py`](code/pipeline/reproduce_third_1.py) | D4 feature graph and meta ranker |
 | [`code/pipeline/align_fresh_mf32.py`](code/pipeline/align_fresh_mf32.py) | Fresh MF32 parameter alignment |
-| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fresh-result reranking and frozen-base alignment |
+| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fresh score-grid to frozen-base alignment |
 | [`code/assets/model_alignment/`](code/assets/model_alignment/) | Fixed MF32 alignment |
 | [`code/build_submission.py`](code/build_submission.py) | Final residuals, stable ranking, deterministic ZIP |
 
