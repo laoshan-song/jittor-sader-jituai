@@ -81,7 +81,7 @@ flowchart TB
 不同成员先在每行内部标准化，避免某个模型仅因分数尺度较大而主导融合：
 
 ```math
-\operatorname{qnorm}(x_{i,j})=
+\mathrm{qnorm}(x_{i,j})=
 \frac{x_{i,j}-\mu_i}
 {\max\left(
 \sqrt{\frac{1}{100}\sum_{k=1}^{100}(x_{i,k}-\mu_i)^2},
@@ -93,9 +93,9 @@ flowchart TB
 
 ```math
 S(s,C_t)=
-\operatorname{Fuse}_m
+\mathrm{Fuse}_m
 \left[
-\operatorname{qnorm}
+\mathrm{qnorm}
 \bigl(f_m(H_{\le t},s,C_t)\bigr)
 \right]
 +\lambda\,r(H_{\le t},s,C_t),
@@ -132,14 +132,14 @@ S(s,C_t)=
 
 ```math
 s_{\mathrm{D1}}(s,c)=
-\operatorname{MLP}(x_{s,c})
+\mathrm{MLP}(x_{s,c})
 +\langle e_s,e_c\rangle+b_s+b_c.
 ```
 
 `NetAttn` 让每个候选分别查询来源的近期目标序列，而不是对历史做一次固定平均：
 
 ```math
-\alpha_j(c)=\operatorname{softmax}_j
+\alpha_j(c)=\mathrm{softmax}_j
 \left(
 \frac{\langle W_qe_c,W_ke_{h_j}\rangle}{\sqrt d}
 -w_t\Delta t_j
@@ -172,13 +172,13 @@ Dataset2 使用按时间端点切分的 CSR 历史。不同成员从互补角度
 
 ```math
 z=
-\operatorname{qnorm}(\log p_{\mathrm{base}})
-+0.05\,\operatorname{qnorm}(\mathbb{1}_{\mathrm{exact\ support}})
-+0.02\,\operatorname{qnorm}(\mathbb{1}_{\mathrm{community\ top10\%}}),
+\mathrm{qnorm}(\log p_{\mathrm{base}})
++0.05\,\mathrm{qnorm}(\mathbb{1}_{\mathrm{exact\ support}})
++0.02\,\mathrm{qnorm}(\mathbb{1}_{\mathrm{community\ top10\%}}),
 ```
 
 ```math
-p=\operatorname{softmax}_{100}(z).
+p=\mathrm{softmax}_{100}(z).
 ```
 
 Dataset1 的来源支持规则只在“最大支持至少 4 且领先第二名至少 2 行”时触发，
@@ -223,7 +223,7 @@ flowchart TB
 
 ```math
 s_3(s,c)=
-\operatorname{MLP}(x_{s,c})
+\mathrm{MLP}(x_{s,c})
 +\langle e_s,e_c\rangle+b_s+b_c
 +0.7\langle \bar h_s,e_c\rangle,
 ```
@@ -272,19 +272,19 @@ def execute(self, values):
 ```
 
 ```math
-H'=\operatorname{LN}(H+\operatorname{MHA}(H,H,H)),
+H'=\mathrm{LN}(H+\mathrm{MHA}(H,H,H)),
 \qquad
-H''=\operatorname{LN}(H'+\operatorname{FFN}(H')).
+H''=\mathrm{LN}(H'+\mathrm{FFN}(H')).
 ```
 
 最终仅加入来自官方 D3 历史的低幅度目标频次项：
 
 ```math
-\operatorname{score}_3=
-\operatorname{base}_3+
+\mathrm{score}_3=
+\mathrm{base}_3+
 0.005\tanh
 \left(
-\frac{1}{2}\operatorname{qnorm}(\log(1+\operatorname{count}(c)))
+\frac{1}{2}\mathrm{qnorm}(\log(1+\mathrm{count}(c)))
 \right).
 ```
 
@@ -304,7 +304,7 @@ H''=\operatorname{LN}(H'+\operatorname{FFN}(H')).
 
 ```math
 a_{c,j}=
-\operatorname{softmax}_j
+\mathrm{softmax}_j
 \left(
 \frac{\langle q(c),k(h_j)\rangle}{\sqrt d}
 -\tau\Delta t_j
@@ -331,7 +331,7 @@ HardNegativeGate 为每个候选拼接三种上下文：
 
 ```math
 g_i=
-\operatorname{MLP}
+\mathrm{MLP}
 \left(
 h_i,\quad
 \frac{1}{100}\sum_jh_j,\quad
@@ -392,11 +392,11 @@ f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c,
 ```
 
 ```math
-\operatorname{score}_4=
-\operatorname{base}_4+
+\mathrm{score}_4=
+\mathrm{base}_4+
 0.02\tanh
 \left(
-\frac{1}{2}\operatorname{qnorm}(f_{\mathrm{MF32}})
+\frac{1}{2}\mathrm{qnorm}(f_{\mathrm{MF32}})
 \right).
 ```
 

@@ -115,7 +115,7 @@ rank only those candidates; they do not perform global retrieval. Scores from
 different experts are aligned row by row:
 
 ```math
-\operatorname{qnorm}(x_{i,j}) =
+\mathrm{qnorm}(x_{i,j}) =
 \frac{x_{i,j}-\mu_i}
 {\max\left(
 \sqrt{\frac{1}{100}\sum_{k=1}^{100}(x_{i,k}-\mu_i)^2},
@@ -175,7 +175,7 @@ mean:
 
 ```math
 s_3(s,c)=
-\operatorname{MLP}(x_{s,c})
+\mathrm{MLP}(x_{s,c})
 +\langle e_s,e_c\rangle+b_s+b_c
 +0.7\langle \bar h_s,e_c\rangle,
 ```
@@ -238,9 +238,9 @@ Inside each block, multi-head self-attention and a feed-forward network both
 use residual connections and LayerNorm:
 
 ```math
-H'=\operatorname{LN}(H+\operatorname{MHA}(H,H,H)),
+H'=\mathrm{LN}(H+\mathrm{MHA}(H,H,H)),
 \qquad
-H''=\operatorname{LN}(H'+\operatorname{FFN}(H')).
+H''=\mathrm{LN}(H'+\mathrm{FFN}(H')).
 ```
 
 `third_1` keeps this D3 member unchanged. The final builder adds a deliberately
@@ -249,14 +249,14 @@ small popularity correction derived only from official Dataset3 history:
 ```math
 r_3(s,c)=
 \tanh\left(
-\frac{1}{2}\operatorname{qnorm}
-\bigl(\log(1+\operatorname{count}_{D3}(c))\bigr)
+\frac{1}{2}\mathrm{qnorm}
+\bigl(\log(1+\mathrm{count}_{D3}(c))\bigr)
 \right),
 ```
 
 ```math
-\operatorname{score}_3(s,c)=
-\operatorname{base}_3(s,c)+0.005\,r_3(s,c).
+\mathrm{score}_3(s,c)=
+\mathrm{base}_3(s,c)+0.005\,r_3(s,c).
 ```
 
 ## Dataset4 (D4)
@@ -297,7 +297,7 @@ Each candidate attends to the same past with its own query:
 
 ```math
 a_{c,j}=
-\operatorname{softmax}_j
+\mathrm{softmax}_j
 \left(
 \frac{\langle q(c),k(h_j)\rangle}{\sqrt d}
 -\tau\Delta t_j
@@ -410,11 +410,11 @@ f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c.
 Its row-normalized bounded residual has weight `0.02`:
 
 ```math
-\operatorname{score}_4(s,c)=
-\operatorname{base}_4(s,c)
+\mathrm{score}_4(s,c)=
+\mathrm{base}_4(s,c)
 +0.02\tanh
 \left(
-\frac{1}{2}\operatorname{qnorm}
+\frac{1}{2}\mathrm{qnorm}
 \bigl(f_{\mathrm{MF32}}(s,c)\bigr)
 \right).
 ```
