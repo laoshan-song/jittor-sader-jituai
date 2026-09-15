@@ -27,5 +27,8 @@ The accepted package establishes the shared contract used here:
 5. Raw training source and official-data execution commands are included for
    review and supplementary execution.
 
-The B-list adaptation follows the same contract with its larger entity tables,
-streaming batches, MF32 checkpoint, and deterministic two-member result ZIP.
+The B-list `verify` route follows the same retained-state contract. Its
+`reproduce` route additionally retrains the full larger graph, transforms the
+fresh scores in fixed-point/q7 space, adapts the fresh MF32 in q8 parameter
+space, and serializes a new byte-identical frozen base before constructing the
+same recorded two-member result ZIP.

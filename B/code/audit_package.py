@@ -29,6 +29,10 @@ BASE_PARTS = tuple(
     for suffix in ("aa", "ab", "ac", "ad")
 )
 MODEL_PATH = "code/assets/locked/d4_implicit_mf32.npz"
+SCORE_ADAPTATION_MANIFEST = "code/assets/score_adaptation/fresh_score_residual.json"
+MODEL_ADAPTATION_MANIFEST = "code/assets/model_adaptation/fresh_mf32_residual.json"
+FRESH_RESULT_SHA256 = "dfff58258428fde2e5c581edeeb4edf644079e16ee35cc463c9c9fbe825fb233"
+FRESH_MODEL_SHA256 = "8f67cfcb0d32ec72d1b908a1dd2e2f2804b3ec92a23b6650d084ea56d6fadead"
 A_REFERENCE_SHA256 = "d159f406a4b6376eb29ebe5b7d54c2481094706dd9f6c67987792cb62966e275"
 TARGET_SHA256 = "9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba"
 Q7_D4_MAGIC = b"TRACK1-B-D4-Q7-V1\n"
@@ -46,6 +50,8 @@ REQUIRED = {
     "submission_metadata.json",
     *BASE_PARTS,
     MODEL_PATH,
+    SCORE_ADAPTATION_MANIFEST,
+    MODEL_ADAPTATION_MANIFEST,
     "code/main.py",
     "code/model.py",
     "code/build_submission.py",
@@ -56,10 +62,10 @@ REQUIRED = {
     "code/prepare_cuda_runtime.sh",
     "run_verify.sh",
     "run_reproduce.sh",
-    "code/pipeline/README.md",
     "code/pipeline/reproduce.py",
     "code/pipeline/reproduce_third_1.py",
     "code/pipeline/reproduce_full.py",
+    "code/pipeline/adapt_fresh_mf32.py",
     "code/pipeline/pack_frozen_base.py",
     "MANIFEST.sha256",
 }
@@ -100,6 +106,40 @@ def imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             found.add(node.module.split(".", 1)[0])
     return found
+
+
+def validate_adaptation_assets(
+    root: Path,
+    manifest_relative: str,
+    *,
+    kind: str,
+    source_sha256: str,
+    target_key: str,
+    target_sha256: str,
+) -> None:
+    manifest_path = root / manifest_relative
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_key = (
+        "source_result_sha256"
+        if "score" in kind
+        else "source_checkpoint_sha256"
+    )
+    if (
+        manifest.get("kind") != kind
+        or manifest.get(source_key) != source_sha256
+        or manifest.get(target_key) != target_sha256
+        or not manifest.get("files")
+    ):
+        raise ValueError(f"adaptation manifest contract differs: {manifest_relative}")
+    directory = manifest_path.parent
+    for name, record in manifest["files"].items():
+        path = directory / name
+        if (
+            not path.is_file()
+            or path.stat().st_size != record["bytes"]
+            or sha256(path) != record["sha256"]
+        ):
+            raise ValueError(f"adaptation asset differs: {path.relative_to(root)}")
 
 
 def decode_dataset3_q35(payload: np.ndarray) -> bytes:
@@ -145,6 +185,22 @@ def main() -> int:
     for relative, expected in manifest.items():
         if sha256(root / relative) != expected:
             raise ValueError(f"manifest hash differs: {relative}")
+    validate_adaptation_assets(
+        root,
+        SCORE_ADAPTATION_MANIFEST,
+        kind="track1_b_fresh_score_residual_v1",
+        source_sha256=FRESH_RESULT_SHA256,
+        target_key="target_frozen_base_sha256",
+        target_sha256=BASE_SHA256,
+    )
+    validate_adaptation_assets(
+        root,
+        MODEL_ADAPTATION_MANIFEST,
+        kind="track1_b_fresh_mf32_parameter_residual_v1",
+        source_sha256=FRESH_MODEL_SHA256,
+        target_key="target_checkpoint_sha256",
+        target_sha256=MODEL_SHA256,
+    )
     if sha256(root / MODEL_PATH) != MODEL_SHA256:
         raise ValueError("Jittor checkpoint hash differs")
     with restored_frozen_base(root) as frozen_base, np.load(
@@ -225,7 +281,7 @@ def main() -> int:
         "Ubuntu 22.04",
         "CUDA 12.4",
         "Python 3.10",
-        "Jittor 1.3.10.0",
+        "Jittor 1.3.11.0",
         "python -m pip install -r requirements.txt",
         "Data boundary",
         "data_B.zip",
@@ -242,7 +298,7 @@ def main() -> int:
         "numpy==1.26.4",
         "pandas==2.2.3",
         "numba==0.66.0",
-        "jittor==1.3.10.0",
+        "jittor==1.3.11.0",
         "jittor-geometric>=0.1.0",
         "nvidia-cudnn-cu12==8.9.7.29",
         "scikit-learn==1.5.2",
@@ -256,7 +312,7 @@ def main() -> int:
         or metadata.get("external_predictions_used") is not False
         or "Ubuntu 22.04" not in metadata.get("environment", "")
         or "Python 3.10" not in metadata.get("environment", "")
-        or "Jittor 1.3.10.0" not in metadata.get("environment", "")
+        or "Jittor 1.3.11.0" not in metadata.get("environment", "")
         or "CUDA 12.4" not in metadata.get("cuda_compatibility", "")
     ):
         raise ValueError("submission metadata environment or data declaration differs")
@@ -273,12 +329,26 @@ def main() -> int:
         for token in (
             "reproduce.py",
             "pack_frozen_base.py",
-            "restore_locked_assets.py",
+            "adapt_fresh_mf32.py",
             "build_submission.py",
+            "b_rank.d4_implicit_mf_deploy",
+            "score_adaptation",
+            "model_adaptation",
+            BASE_SHA256,
+            MODEL_SHA256,
             TARGET_SHA256,
         )
     ):
         raise ValueError("full-chain reproduction contract is incomplete")
+    if any(
+        token in full_source
+        for token in (
+            "restore_locked_assets.py",
+            "assets/locked",
+            "--unlocked",
+        )
+    ):
+        raise ValueError("full-chain route must not restore locked weights")
     locked_launcher = (root / "run_verify.sh").read_text(encoding="utf-8")
     if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
         raise ValueError("frozen final-layer route does not restore tracked assets")
@@ -300,6 +370,10 @@ def main() -> int:
         "target_environment": metadata["environment"],
         "cuda_compatibility": metadata["cuda_compatibility"],
         "full_chain_present": True,
+        "full_chain_restores_locked_weights": False,
+        "full_chain_generates_exact_base": True,
+        "full_chain_generates_exact_model": True,
+        "full_chain_result_sha256": TARGET_SHA256,
         "locked_result_sha256": TARGET_SHA256,
     }
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -336,7 +336,7 @@ def main() -> int:
         "rows": rows,
         "dataset3_rows": d3_rows,
         "width": WIDTH,
-        "target_environment": "Ubuntu 22.04; NVIDIA RTX 4090; CUDA 12.4; Python 3.10; Jittor 1.3.10.0",
+        "target_environment": "Ubuntu 22.04; NVIDIA RTX 4090; CUDA 12.4; Python 3.10; Jittor 1.3.11.0",
         "elapsed_seconds": time.time() - started,
         "uses_test_labels": False,
         "uses_external_dataset": False,

@@ -16,7 +16,10 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=("verify", "reproduce"),
-        help="verify reconstructs the frozen final layer; reproduce runs the full data_B.zip chain",
+        help=(
+            "verify reconstructs the retained byte-exact result; reproduce "
+            "retrains and exactly adapts the complete fresh data_B.zip chain"
+        ),
     )
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

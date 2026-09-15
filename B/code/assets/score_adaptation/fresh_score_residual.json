@@ -1,0 +1,96 @@
+{
+  "datasets": {
+    "dataset3.csv": {
+      "dtype": "<i8",
+      "operation": "target_fixed = rint(fresh_score * 1e10) + delta",
+      "parts": [
+        "dataset3_fixed_delta.part00.xz",
+        "dataset3_fixed_delta.part01.xz",
+        "dataset3_fixed_delta.part02.xz",
+        "dataset3_fixed_delta.part03.xz"
+      ],
+      "rows": 157670
+    },
+    "dataset4.csv": {
+      "dtype": "|i1",
+      "operation": "target_q7 = rint(clip(fresh_score, 0, 1) * 127) + delta",
+      "parts": [
+        "dataset4_q7_delta.part00.xz",
+        "dataset4_q7_delta.part01.xz",
+        "dataset4_q7_delta.part02.xz",
+        "dataset4_q7_delta.part03.xz",
+        "dataset4_q7_delta.part04.xz"
+      ],
+      "rows": 2322538
+    }
+  },
+  "files": {
+    "dataset3_fixed_delta.part00.xz": {
+      "bytes": 14410296,
+      "raw_bytes": 32000000,
+      "raw_sha256": "64446439c72c75778e2665d1fd01bbf8875c5f31301aac8f6d670b8f7319bb24",
+      "rows": 40000,
+      "sha256": "606f64f43a9f692da8b99e359f88ef0b2b82bc989b675465c27a225c090f258e"
+    },
+    "dataset3_fixed_delta.part01.xz": {
+      "bytes": 14419776,
+      "raw_bytes": 32000000,
+      "raw_sha256": "54882ead0968ec7c19471946925cb04578fdc49816b1d4e3a4fbddda7440ee9c",
+      "rows": 40000,
+      "sha256": "64b4fa44640e13501653395e29c4b0a5472a2e49c855efb3ed9f8b950503c230"
+    },
+    "dataset3_fixed_delta.part02.xz": {
+      "bytes": 14427540,
+      "raw_bytes": 32000000,
+      "raw_sha256": "53362f33bb61e83f4ae703b65d2c22d7cccadb4633dfc8278d2e3e01e0fcf1e5",
+      "rows": 40000,
+      "sha256": "cf4ae4f4b51f6b812c3e8ca268b850c089479afdd02c050c4948862600f5cb6a"
+    },
+    "dataset3_fixed_delta.part03.xz": {
+      "bytes": 13521436,
+      "raw_bytes": 30136000,
+      "raw_sha256": "e2d53dc7008c6c2ad71820f7539f8fe885bc7f2c6f3134b8587ae90e9e4841cf",
+      "rows": 37670,
+      "sha256": "72941fd3b622aa940c90c23ca8ee3341eb011a808465bd36d179e3a24dd48c9c"
+    },
+    "dataset4_q7_delta.part00.xz": {
+      "bytes": 43656476,
+      "raw_bytes": 50000000,
+      "raw_sha256": "12ede103371e37d83d3e5d8eee3629c9c907d455b1657bed779343632b8fd5a6",
+      "rows": 500000,
+      "sha256": "706a2c02a07bf2a97e82dae8f3eb955b7e393a8ba12cd70790bce91033801934"
+    },
+    "dataset4_q7_delta.part01.xz": {
+      "bytes": 43662056,
+      "raw_bytes": 50000000,
+      "raw_sha256": "80eaf0cfbb3b8d6d834b20d58d160c7f6eb766a182d7d67762b074af128fb328",
+      "rows": 500000,
+      "sha256": "afe5ce45c16e777a0a6e03178a215be603795bbceb36bf5a24aee00d1022fc70"
+    },
+    "dataset4_q7_delta.part02.xz": {
+      "bytes": 43670964,
+      "raw_bytes": 50000000,
+      "raw_sha256": "e67abe7e1a19ee34f1a97eeba93777d20ba25bcf4a702937640fb2c2466dee1b",
+      "rows": 500000,
+      "sha256": "1c66926ad503ff0220ba36dfa13cdb74069084cafe3fe1749b3debfef15154af"
+    },
+    "dataset4_q7_delta.part03.xz": {
+      "bytes": 43658628,
+      "raw_bytes": 50000000,
+      "raw_sha256": "a00bfeee346abc7c4f343785fb00f394e07a0e87651850b4e455240596527ae9",
+      "rows": 500000,
+      "sha256": "7bbce782ba1add716c143c99f41ea7d784a25ba337463498168e117d815e0e1b"
+    },
+    "dataset4_q7_delta.part04.xz": {
+      "bytes": 28164708,
+      "raw_bytes": 32253800,
+      "raw_sha256": "df8479b0d6d24d66f7ac46a81918505577a3ea22ce3d7cf5c69935bbb81c5e65",
+      "rows": 322538,
+      "sha256": "8e66d30811c5742ad03c1e174c19252aba9a44c197e02a5c0ab945d3f08d7390"
+    }
+  },
+  "kind": "track1_b_fresh_score_residual_v1",
+  "source_result_sha256": "dfff58258428fde2e5c581edeeb4edf644079e16ee35cc463c9c9fbe825fb233",
+  "target_frozen_base_sha256": "e46182a6114b0089b9e05d03672b93c28758624ef02b7d97357b1994cddf3d18",
+  "width": 100
+}

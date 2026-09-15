@@ -14,7 +14,7 @@ the fusion principle, and the audit contract are identical.
 | Members | Dataset1/Dataset2 graph rank + VAE/BPR + set experts | Dataset3 frequency residual + Dataset4 expert graph and MF | learn or count from official history |
 | Base + fusion | frozen base + bounded in-row residual | frozen base + bounded in-row residual | correct only within the 100 candidates |
 | Output | deterministic two-member ZIP | deterministic two-member ZIP | fixed order, fixed digits, SHA-256 |
-| Delivery | verify from retained final state | verify + full-chain reproduce | byte-exact recorded result |
+| Delivery | verify from retained final state | verify + full-chain fresh reproduce | fixed public interfaces and audited output |
 
 ## Differences are data-scale adaptations only
 

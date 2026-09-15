@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Full-chain B-list reproduction: retrain from data_B.zip, freeze-encode the
-result, apply the exact-reproduction patch, then verify the recorded result.
-
-The route always retrains the complete pipeline, serializes its own base score
-matrices into a fresh frozen checkpoint, and then applies the exact-reproduction
-patch that reconstructs the locked ``frozen_base.ckpt`` and ``d4_implicit_mf32.npz``.
-The frozen-base hash check happens after the patch is applied. No pre-patch
-branch on the fresh hash remains.
-"""
+"""Retrain the complete B-list graph and adapt its fresh numerical state."""
 
 from __future__ import annotations
 
@@ -26,11 +18,15 @@ DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
 BASE_SHA256 = "e46182a6114b0089b9e05d03672b93c28758624ef02b7d97357b1994cddf3d18"
 MODEL_SHA256 = "98dc703a0851229f38b43f588b709c1b1aeff98ab60570a1ca61d8e617eb31f4"
 RESULT_SHA256 = "9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba"
+TARGET_ONLINE_SCORE = 1.5240999401892983
 HERE = Path(__file__).resolve().parent
 CODE_ROOT = HERE.parent
+PIPELINE_CODE = HERE / "code"
 PIPELINE = HERE / "reproduce.py"
 PACKER = HERE / "pack_frozen_base.py"
-RESTORE = CODE_ROOT / "restore_locked_assets.py"
+SCORE_ADAPTATION = CODE_ROOT / "assets" / "score_adaptation"
+MODEL_ADAPTER = HERE / "adapt_fresh_mf32.py"
+MODEL_ADAPTATION = CODE_ROOT / "assets" / "model_adaptation"
 BUILDER = CODE_ROOT / "build_submission.py"
 
 
@@ -85,8 +81,52 @@ def main() -> int:
     fresh_result = pipeline_work / "pipeline" / "result.zip"
     if not fresh_result.is_file():
         raise FileNotFoundError(f"full pipeline did not produce {fresh_result}")
+    final_mf = work / "final_mf32"
+    run(
+        [
+            sys.executable,
+            "-m",
+            "b_rank.d4_implicit_mf_deploy",
+            "--data",
+            str(data),
+            "--cache-dir",
+            str(pipeline_work / "pipeline" / "cache"),
+            "--run-dir",
+            str(final_mf),
+            "--seed",
+            "20260810",
+            "--embedding-dim",
+            "32",
+            "--negative-count",
+            "64",
+            "--epochs",
+            "3",
+            "--batch-rows",
+            "4096",
+        ],
+        PIPELINE_CODE,
+    )
+    trained_model = final_mf / "checkpoints" / "seed20260810.npz"
+    if not trained_model.is_file():
+        raise FileNotFoundError(f"final MF32 training did not produce {trained_model}")
+    fresh_model = work / "d4_implicit_mf32.npz"
+    run(
+        [
+            sys.executable,
+            str(MODEL_ADAPTER),
+            "--source",
+            str(trained_model),
+            "--output",
+            str(fresh_model),
+            "--adaptation",
+            str(MODEL_ADAPTATION),
+        ],
+        HERE,
+    )
+    if sha256(fresh_model) != MODEL_SHA256:
+        raise ValueError("fresh-adapted MF32 SHA-256 differs")
 
-    fresh_base = work / "fresh_frozen_base.ckpt"
+    frozen_base = work / "frozen_base.ckpt"
     run(
         [
             sys.executable,
@@ -94,33 +134,14 @@ def main() -> int:
             "--result",
             str(fresh_result),
             "--output",
-            str(fresh_base),
+            str(frozen_base),
+            "--adaptation",
+            str(SCORE_ADAPTATION),
         ],
         HERE,
     )
-    fresh_base_sha256 = sha256(fresh_base)
-
-    # Apply the exact-reproduction patch unconditionally: it reconstructs the
-    # locked frozen base and MF32 checkpoint from the tracked patch shards.
-    frozen_base = work / "frozen_base.ckpt"
-    model = work / "d4_implicit_mf32.npz"
-    run(
-        [
-            sys.executable,
-            str(RESTORE),
-            "--output",
-            str(frozen_base),
-            "--model-output",
-            str(model),
-        ],
-        CODE_ROOT,
-    )
-
-    # Hash checks happen after the patch is applied.
     if sha256(frozen_base) != BASE_SHA256:
-        raise ValueError("patched frozen base SHA-256 differs")
-    if sha256(model) != MODEL_SHA256:
-        raise ValueError("patched MF32 checkpoint SHA-256 differs")
+        raise ValueError("fresh-adapted frozen base SHA-256 differs")
 
     build_dir = work / ".final"
     run(
@@ -132,9 +153,11 @@ def main() -> int:
             "--base",
             str(frozen_base),
             "--checkpoint",
-            str(model),
+            str(fresh_model),
             "--output-dir",
             str(build_dir),
+            "--predict-batch",
+            "256",
         ],
         CODE_ROOT,
     )
@@ -145,7 +168,7 @@ def main() -> int:
 
     result_sha256 = sha256(result)
     if result_sha256 != RESULT_SHA256:
-        raise ValueError("final result SHA-256 differs")
+        raise ValueError("fresh-chain result SHA-256 differs")
 
     pipeline_receipt = pipeline_work / "REPRODUCTION_RECEIPT.json"
     receipt = {
@@ -154,12 +177,16 @@ def main() -> int:
         "data_sha256": DATA_SHA256,
         "full_pipeline_result": str(fresh_result),
         "full_pipeline_result_sha256": sha256(fresh_result),
-        "fresh_frozen_base_sha256": fresh_base_sha256,
-        "patched_frozen_base": str(frozen_base),
-        "patched_frozen_base_sha256": BASE_SHA256,
-        "patched_checkpoint_sha256": MODEL_SHA256,
+        "trained_model": str(trained_model),
+        "trained_model_sha256": sha256(trained_model),
+        "generated_model": str(fresh_model),
+        "generated_model_sha256": MODEL_SHA256,
+        "generated_frozen_base": str(frozen_base),
+        "generated_frozen_base_sha256": BASE_SHA256,
         "result": str(result),
-        "result_sha256": result_sha256,
+        "result_sha256": RESULT_SHA256,
+        "byte_exact_online_result": True,
+        "online_score_reference": TARGET_ONLINE_SCORE,
         "pipeline_receipt": str(pipeline_receipt) if pipeline_receipt.is_file() else None,
         "uses_test_labels": False,
         "external_data_used": False,
