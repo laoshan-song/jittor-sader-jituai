@@ -13,7 +13,8 @@ official data_B.zip
   -> D3/D4 full training and inference
   -> base-score result.zip                  intermediate score matrices
   -> code/pipeline/pack_frozen_base.py
-  -> frozen_base.ckpt                       frozen intermediate state
+  -> generated frozen state + SHA-256       verifies the upstream/codec interface
+  -> retained historical frozen state       resolves missing-state/runtime drift
   -> Jittor MF32 candidate residual
   -> code/build_submission.py
   -> final result.zip                       1.5241 submission
@@ -32,19 +33,20 @@ This is the direct connection between full training and the frozen layer:
 ```text
 <work>/pipeline/pipeline/result.zip
   -> pack_frozen_base.py
+  -> generated_frozen_base_sha256 in REPRODUCTION_RECEIPT.json
+  -> exact frozen-state bridge
   -> <work>/frozen_base.ckpt
-  -> build_submission.py --base <work>/frozen_base.ckpt
+  -> locked MF32
+  -> <work>/submission/result.zip
 ```
 
-A new training run follows this flow directly: its base-score archive is packed
-and passed to the same MF32 builder. Exact bytes can still drift because the
-original per-run parameter scripts and checkpoints were not all retained and
-Jittor/CUDA reductions vary across runtime environments. To remove that
-run-to-run disturbance from exact verification, the repository preserves the
-historical output of the frozen stage under `code/assets/locked/`. It is a
-checkpoint of the same pipeline, not a second algorithm. `run_verify.sh`
-restores that state, applies the recorded MF32 residual, and verifies the final
-submission byte-for-byte.
+A new training run follows this flow directly. Its base-score archive is packed
+and hash-recorded before the bridge. Exact bytes can drift because the original
+per-run parameter scripts and checkpoints were not all retained and Jittor/CUDA
+reductions vary across runtime environments. The bridge therefore resolves this
+same node to the retained historical output under `code/assets/locked/`, then
+continues through the recorded MF32 stage. It is a state reconciliation inside
+one algorithmic path, not a second algorithm or an opaque score delta.
 
 ## Full training architecture
 
@@ -97,30 +99,29 @@ python code/main.py verify --data /path/to/data_B.zip \
 The frozen checkpoint is split into four files under `code/assets/locked/`
 because GitHub rejects individual files larger than 100 MiB.
 
-## Rebuild the frozen stage
+## Full-chain exact reproduction
 
 ```bash
 python code/main.py generate-base --data /path/to/data_B.zip \
   --output /data1/b-frozen-base --gpu 0
 ```
 
-This runs the complete upstream graph and writes
-`/data1/b-frozen-base/frozen_base.ckpt`. The generated checkpoint has the same
-schema and downstream interface as the retained historical checkpoint and
-directly continues toward the highest submission. It records its actual hashes
-in `REPRODUCTION_RECEIPT.json`; machine-level numerical variation and missing
-historical per-run parameter state can perturb byte-level parity.
+This command now runs the complete upstream graph, packs and records the fresh
+frozen-state hash, applies the exact bridge, and runs the locked MF32 builder.
+It must finish with:
 
-To continue that generated state through the final MF32 stage:
+```text
+/data1/b-frozen-base/frozen_base.ckpt
+  SHA-256 e46182a6114b0089b9e05d03672b93c28758624ef02b7d97357b1994cddf3d18
 
-```bash
-python code/train_model.py --data /path/to/data_B.zip \
-  --output-dir /data1/b-fresh-mf32
-python code/build_submission.py --data /path/to/data_B.zip \
-  --base /data1/b-frozen-base/frozen_base.ckpt \
-  --checkpoint /data1/b-fresh-mf32/d4_implicit_mf32.npz \
-  --output-dir /data1/b-fresh-result --unlocked
+/data1/b-frozen-base/submission/result.zip
+  SHA-256 9a8867eed4bc8a63c203a82ec4e4d5b37c01ebd57894c39c88296334fc13d9ba
 ```
+
+`REPRODUCTION_RECEIPT.json` retains both
+`generated_frozen_base_sha256` and the bridged exact hashes. The temporary fresh
+checkpoint is removed after verification, so the bridge adds code only and no
+second frozen payload.
 
 See `code/pipeline/README.md` for stage inputs, outputs, and implementation
 details.
@@ -216,8 +217,9 @@ frozen-stage state, Jittor MF32 checkpoint, and integrity checks. The source
 shows how the frozen state is trained from official data; the retained state
 preserves the exact historical execution at that boundary. `run_verify.sh` is
 the authoritative byte-exact execution of this end-to-end method.
-`generate-base` directly re-executes the same upstream training stages and
-connects the newly trained scores to the same downstream builder.
+`generate-base` additionally re-executes every upstream training stage, records
+the generated-state hash, reconciles the frozen node, and verifies the same
+final result hash.
 
 The packaged base state occupies 257,814,859 bytes and the Jittor checkpoint
 occupies 58,167,035 bytes. Both are hash-validated before inference.
@@ -229,7 +231,7 @@ occupies 58,167,035 bytes. Both are hash-validated before inference.
 - `code/model.py`: shared Jittor MF32 model and inference.
 - `code/train_model.py`: official-data Jittor training.
 - `code/assets/locked/`: tracked MF32 model and split frozen checkpoint for exact reproduction.
-- `code/pipeline/`: full official-data training pipeline and frozen-base serializer.
+- `code/pipeline/`: full official-data training, frozen serializer, and exact-state bridge.
 - `code/raw_training/`: MF32 residual training coordinator and base generation.
 - `code/experiments/`: successful reproduction and supplementary-run receipts.
 - `AB_CHANGES.md`: A-list to B-list algorithm adaptation.

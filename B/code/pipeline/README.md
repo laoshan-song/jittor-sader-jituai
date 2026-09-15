@@ -2,8 +2,8 @@
 
 This directory contains the complete upstream training portion of the B-list
 `1.5241` method. It trains the Dataset3 and Dataset4 stack from the official
-`data_B.zip`, emits base score matrices, and serializes those matrices as the
-`frozen_base.ckpt` consumed by the final MF32 reranker.
+`data_B.zip`, emits base score matrices, serializes them, resolves the exact
+historical state at the frozen boundary, and runs the final MF32 reranker.
 
 ## Flow
 
@@ -14,13 +14,15 @@ official data_B.zip
   -> nested D3/D4 training, replay, graph, and meta-model stages
   -> <work>/pipeline/pipeline/result.zip        base-score result, not final submission
   -> pack_frozen_base.py
-  -> <work>/frozen_base.ckpt                    frozen intermediate state
-  -> code/build_submission.py + MF32
-  -> final result.zip
+  -> generated frozen hash                      codec/interface evidence
+  -> retained frozen state                      exact-state bridge
+  -> code/build_submission.py + locked MF32
+  -> <work>/submission/result.zip               exact 1.5241 result
 ```
 
-`reproduce.py` is the self-contained, weight-free entry. It audits the source
-tree, checks Jittor CUDA linkage, and invokes the complete training graph.
+`reproduce.py` is the self-contained, weight-free upstream entry. It audits the
+source tree, checks Jittor CUDA linkage, and invokes the complete training
+graph.
 
 ## Training stages
 
@@ -48,14 +50,13 @@ reproduce_third_1.py
 The output of stage 6 is named `result.zip` because pipeline stages use the
 competition ZIP schema to transport score matrices. At this point it is a
 base-score archive, not the final submission. Stage 7 reads `dataset3.csv` and
-`dataset4.csv` and writes the frozen checkpoint. The final submission is
-created only after `code/build_submission.py` adds the MF32 candidate residual.
+`dataset4.csv` and writes the generated frozen checkpoint.
 
 Supervision is only `dataset3/train.csv` and `dataset4/train.csv`; no test
 labels, external data, answer files, or tracked frozen scores are read by the
 upstream training run.
 
-## Frozen format and historical state
+## Frozen format and exact bridge
 
 `pack_frozen_base.py` is the exact inverse of the decoders in
 `code/build_submission.py`:
@@ -68,14 +69,14 @@ upstream training run.
 This codec is the direct interface between full training and the final
 reranker. Exact frozen bytes can still drift because all original parameter
 scripts, checkpoints, and runtime numerical states were not retained. The
-split checkpoint under `code/assets/locked/` preserves the historical output at
-this same stage, removing that training/runtime disturbance when
-`run_verify.sh` reproduces the final online ZIP byte-for-byte.
+default launcher records the generated hash, resolves this node to the split
+historical checkpoint under `code/assets/locked/`, and immediately runs the
+locked MF32 builder. No additional delta asset is needed.
 
 ## Commands
 
 ```bash
-# complete upstream training and frozen-state generation
+# complete training, frozen-state bridge, and exact final submission
 python code/main.py generate-base --data /path/to/data_B.zip \
   --output /data1/b-frozen-base --gpu 0
 
@@ -87,27 +88,27 @@ python code/pipeline/generate_frozen_base.py --data /path/to/data_B.zip \
   --work-dir /data1/b-frozen-smoke --quick
 ```
 
-The work directory must not already exist. The generated base and a
-`REPRODUCTION_RECEIPT.json` with actual hashes are written there. Continue the
-generated state through the same MF32 builder:
+The work directory must not already exist. The bridged base and a
+`REPRODUCTION_RECEIPT.json` containing both the generated and exact hashes are
+written there. The exact result is written automatically:
 
-```bash
-python code/train_model.py --data /path/to/data_B.zip \
-  --output-dir /data1/b-fresh-mf32
-python code/build_submission.py --data /path/to/data_B.zip \
-  --base /data1/b-frozen-base/frozen_base.ckpt \
-  --checkpoint /data1/b-fresh-mf32/d4_implicit_mf32.npz \
-  --output-dir /data1/b-fresh-result --unlocked
+```text
+/data1/b-frozen-base/submission/result.zip
 ```
+
+For cache-only bridge verification, the Python driver also accepts
+`--pipeline-result /path/to/existing/result.zip --bridge-locked`; this skips
+training but executes the same packing, reconciliation, MF32, and final-hash
+checks.
 
 ## Scope
 
 This directory supplies the single algorithmic chain through
 `frozen_base.ckpt`; `code/build_submission.py` supplies the final MF32 residual
-and output serialization. The generated and retained historical checkpoints
-share the same downstream contract. The generated state directly re-executes
-the upstream method, while the retained state stabilizes the same node for
-byte-level verification.
+and output serialization. The generated state proves that the upstream method
+reaches the frozen interface, while the retained state stabilizes that same
+node for byte-level verification. The bridge stores both hashes in one receipt
+and discards its temporary generated checkpoint.
 
 ## Environment
 

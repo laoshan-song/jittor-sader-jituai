@@ -28,12 +28,16 @@ from the official data. `code/pipeline/reproduce_third_1.py` trains every
 Dataset3/Dataset4 component from scratch and emits the base score matrices, and
 `code/pipeline/pack_frozen_base.py` -- the exact inverse of the
 `code/build_submission.py` decoders -- packs them into `frozen_base.ckpt`
-(Dataset3 ZigZag q35+LZMA, Dataset4 7-bit packing). This documents and executes
-the complete training method through the frozen-state boundary. The retained
-split checkpoint under `code/assets/locked/` is the preserved historical output
-of that same stage; it stabilizes byte-level verification when missing per-run
-parameter scripts and machine-dependent numerical reductions perturb a new
-training run.
+(Dataset3 ZigZag q35+LZMA, Dataset4 7-bit packing).
+
+This executes the complete training method through the frozen-state boundary.
+The retained split checkpoint under `code/assets/locked/` is the preserved
+historical output of that same stage; it stabilizes byte-level verification
+when missing per-run parameter scripts and machine-dependent numerical
+reductions perturb a new training run. `generate-base` records the fresh
+checkpoint hash, resolves that same node to the retained historical state, and
+runs the locked MF32 stage to verify the final `1.5241` result. The bridge
+reuses the existing assets and adds no numerical delta payload.
 
 For the recorded B-list result, the reviewer supplies the official
 `data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint are

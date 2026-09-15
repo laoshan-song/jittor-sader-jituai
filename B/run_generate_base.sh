@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate the frozen base from official data, then pack it into frozen_base.ckpt.
+# Run full training, resolve the frozen-state bridge, and build the exact result.
 # Usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +18,9 @@ export ML_CACHE_ROOT="${ML_CACHE_ROOT:-$(dirname "$WORK")/.runtime}"
 mkdir -p "$JITTOR_HOME" "$PYTHONPYCACHEPREFIX" "$TMPDIR"
 source "$ROOT/code/prepare_cuda_runtime.sh" "$PYTHON"
 "$PYTHON" "$ROOT/code/check_environment.py"
-CMD=("$PYTHON" "$GEN/generate_frozen_base.py" --data "$DATA" --work-dir "$WORK" --gpu "$GPU")
+CMD=(
+  "$PYTHON" "$GEN/generate_frozen_base.py"
+  --data "$DATA" --work-dir "$WORK" --gpu "$GPU" --bridge-locked
+)
 if [[ -n "$OUTPUT" ]]; then CMD+=(--output "$OUTPUT"); fi
 exec "${CMD[@]}"

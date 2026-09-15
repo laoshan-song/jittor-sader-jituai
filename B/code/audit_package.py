@@ -241,6 +241,7 @@ def main() -> int:
         "Data and label declaration",
         "Reproduction boundary",
         "The reviewer supplies only the official `data_B.zip`",
+        "generated_frozen_base_sha256",
         TARGET_SHA256,
     )
     if any(value not in readme for value in required_readme_text):
@@ -300,6 +301,19 @@ def main() -> int:
     generate_launcher = (root / "run_generate_base.sh").read_text(encoding="utf-8")
     if 'dirname "${BASH_SOURCE[0]}")" && pwd' not in generate_launcher:
         raise ValueError("frozen-base launcher does not resolve the B package root")
+    if "--bridge-locked" not in generate_launcher:
+        raise ValueError("frozen-base launcher does not enable the exact-state bridge")
+    bridge_source = (root / "code/pipeline/generate_frozen_base.py").read_text(encoding="utf-8")
+    if any(
+        token not in bridge_source
+        for token in (
+            "generated_frozen_base_sha256",
+            "restore_locked_assets.py",
+            "build_submission.py",
+            TARGET_SHA256,
+        )
+    ):
+        raise ValueError("frozen-base exact bridge contract is incomplete")
     locked_launcher = (root / "run_inference.sh").read_text(encoding="utf-8")
     if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
         raise ValueError("locked inference does not restore the tracked assets")
