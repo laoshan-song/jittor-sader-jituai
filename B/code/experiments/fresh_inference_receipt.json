@@ -1,7 +1,0 @@
-{
-  "base_sha256": "bfd80bf89f84d80fb8f045c4b0332d7e2fa76f0fc5548c082b0db7bffd374925",
-  "checkpoint_sha256": "7bd44ebf3809fd395b8aa96b7fa9e5337ea7a31df238eae19fa5f5526faa44e7",
-  "decision": "PASS_SUPPLEMENTARY_INFERENCE",
-  "kind": "track1_b_inference_receipt_v1",
-  "result_sha256": "55d7e81f600828e2c84ad6bbae63efc8d92f1b1dc4caf567ccd057d4f91368e2"
-}

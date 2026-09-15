@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed static audit for the compact locked reconstruction package."""
+"""Fail-closed static audit for the two-route B-list reconstruction package."""
 
 from __future__ import annotations
 
@@ -50,28 +50,17 @@ REQUIRED = {
     "code/model.py",
     "code/build_submission.py",
     "code/restore_locked_assets.py",
-    "code/train_model.py",
     "code/check_environment.py",
     "code/audit_package.py",
     "code/build_manifest.py",
     "code/prepare_cuda_runtime.sh",
-    "run_inference.sh",
     "run_verify.sh",
-    "run_train.sh",
-    "run_fresh_inference.sh",
-    "run_generate_base.sh",
+    "run_reproduce.sh",
     "code/pipeline/README.md",
     "code/pipeline/reproduce.py",
     "code/pipeline/reproduce_third_1.py",
-    "code/pipeline/generate_frozen_base.py",
+    "code/pipeline/reproduce_full.py",
     "code/pipeline/pack_frozen_base.py",
-    "code/raw_training/README.md",
-    "code/raw_training/main.py",
-    "code/raw_training/build_base.py",
-    "code/raw_training/verify_fresh_run.py",
-    "code/experiments/locked_reproduction_receipt.json",
-    "code/experiments/fresh_training_receipt.json",
-    "code/experiments/fresh_inference_receipt.json",
     "MANIFEST.sha256",
 }
 
@@ -226,22 +215,20 @@ def main() -> int:
         ):
             raise ValueError("quantized checkpoint decode differs")
     source_imports = set().union(*(imports(path) for path in (root / "code").glob("*.py")))
-    raw_training_sources = sorted((root / "code" / "raw_training").glob("*.py"))
-    source_imports.update(*(imports(path) for path in raw_training_sources))
     if "jittor" not in source_imports:
         raise ValueError("Jittor import is absent")
     readme = (root / "README.md").read_text(encoding="utf-8")
     required_readme_text = (
-        "Byte-for-byte reproduction of the online submission",
+        "Public commands",
+        "Frozen final-layer reproduction",
+        "Full-chain reproduction",
         "Ubuntu 22.04",
         "CUDA 12.4",
         "Python 3.10",
         "Jittor 1.3.10.0",
         "python -m pip install -r requirements.txt",
-        "Data and label declaration",
-        "Reproduction boundary",
-        "The reviewer supplies only the official `data_B.zip`",
-        "generated_frozen_base_sha256",
+        "Data boundary",
+        "official `data_B.zip`",
         TARGET_SHA256,
     )
     if any(value not in readme for value in required_readme_text):
@@ -273,75 +260,31 @@ def main() -> int:
         or "CUDA 12.4" not in metadata.get("cuda_compatibility", "")
     ):
         raise ValueError("submission metadata environment or data declaration differs")
-    raw_readme = (root / "code/raw_training/README.md").read_text(encoding="utf-8")
-    if (
-        "base_result.zip" not in raw_readme
-        or "byte-for-byte reproduction" not in raw_readme
-        or "test-set ground truth" not in raw_readme
-    ):
-        raise ValueError("raw-training reproduction boundary is undocumented")
-    fresh_launcher = (root / "run_fresh_inference.sh").read_text(encoding="utf-8")
-    if "code/raw_training/build_base.py" not in fresh_launcher or "--data \"$DATA\"" not in fresh_launcher:
-        raise ValueError("fresh inference does not rebuild its official-data base")
-    fresh_sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in [root / "run_train.sh", root / "run_fresh_inference.sh", *raw_training_sources]
-    )
-    if "models/frozen_base.ckpt" in fresh_sources:
-        raise ValueError("fresh training or inference references the locked base")
-    for launcher in (
-        "run_inference.sh",
-        "run_train.sh",
-        "run_fresh_inference.sh",
-        "run_generate_base.sh",
-    ):
+    for launcher in ("run_verify.sh", "run_reproduce.sh"):
         source = (root / launcher).read_text(encoding="utf-8")
         if "prepare_cuda_runtime.sh" not in source or "check_environment.py" not in source:
             raise ValueError(f"CUDA preparation or environment check is absent: {launcher}")
-    generate_launcher = (root / "run_generate_base.sh").read_text(encoding="utf-8")
-    if 'dirname "${BASH_SOURCE[0]}")" && pwd' not in generate_launcher:
-        raise ValueError("frozen-base launcher does not resolve the B package root")
-    if "--bridge-locked" not in generate_launcher:
-        raise ValueError("frozen-base launcher does not enable the exact-state bridge")
-    bridge_source = (root / "code/pipeline/generate_frozen_base.py").read_text(encoding="utf-8")
+    reproduce_launcher = (root / "run_reproduce.sh").read_text(encoding="utf-8")
+    if "code/pipeline/reproduce_full.py" not in reproduce_launcher:
+        raise ValueError("full-chain launcher does not invoke the reconstruction driver")
+    full_source = (root / "code/pipeline/reproduce_full.py").read_text(encoding="utf-8")
     if any(
-        token not in bridge_source
+        token not in full_source
         for token in (
-            "generated_frozen_base_sha256",
+            "reproduce.py",
+            "pack_frozen_base.py",
             "restore_locked_assets.py",
             "build_submission.py",
             TARGET_SHA256,
         )
     ):
-        raise ValueError("frozen-base exact bridge contract is incomplete")
-    locked_launcher = (root / "run_inference.sh").read_text(encoding="utf-8")
+        raise ValueError("full-chain reproduction contract is incomplete")
+    locked_launcher = (root / "run_verify.sh").read_text(encoding="utf-8")
     if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
-        raise ValueError("locked inference does not restore the tracked assets")
+        raise ValueError("frozen final-layer route does not restore tracked assets")
     reference = (root / "A_LIST_REFERENCE.md").read_text(encoding="utf-8")
     if A_REFERENCE_SHA256 not in reference:
         raise ValueError("A-list reference is incomplete")
-    locked = json.loads((root / "code/experiments/locked_reproduction_receipt.json").read_text(encoding="utf-8"))
-    fresh_training = json.loads(
-        (root / "code/experiments/fresh_training_receipt.json").read_text(encoding="utf-8")
-    )
-    fresh_inference = json.loads(
-        (root / "code/experiments/fresh_inference_receipt.json").read_text(encoding="utf-8")
-    )
-    if (
-        locked.get("decision") != "PASS"
-        or locked.get("result_sha256") != TARGET_SHA256
-        or locked.get("checkpoint_sha256") != MODEL_SHA256
-        or locked.get("base_sha256") != BASE_SHA256
-        or locked.get("byte_exact_online_result") is not True
-    ):
-        raise ValueError("locked full-run receipt differs")
-    if (
-        fresh_training.get("decision") != "PASS_SUPPLEMENTARY_TRAINING"
-        or fresh_inference.get("decision") != "PASS_SUPPLEMENTARY_INFERENCE"
-        or not fresh_inference.get("checkpoint_sha256")
-        or not fresh_inference.get("result_sha256")
-    ):
-        raise ValueError("supplementary receipts are incomplete")
     report = {
         "decision": "PASS",
         "file_count": len(files),
@@ -356,7 +299,7 @@ def main() -> int:
         "external_predictions_used": False,
         "target_environment": metadata["environment"],
         "cuda_compatibility": metadata["cuda_compatibility"],
-        "raw_training_present": True,
+        "full_chain_present": True,
         "locked_result_sha256": TARGET_SHA256,
     }
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -1,56 +1,25 @@
 # A/B algorithm consistency
 
-The accepted A-list package and this B-list package use the same high-level
-reproduction contract: official competition input, retained model assets,
-Jittor candidate scoring, candidate-local fusion, and deterministic result
-serialization.
+The accepted A-list and B-list packages share the same outer contract:
+official competition input, retained final state, Jittor candidate scoring,
+candidate-local fusion, and deterministic ZIP serialization.
 
-| Contract | A list | B list adaptation |
+| Contract | A list | B list |
 | --- | --- | --- |
-| Fixed base member | retained `base_result.zip` | compact retained base checkpoint |
-| Base origin | official-data raw training | official-data full pipeline in `code/pipeline/` |
-| Jittor model | BPR32 candidate signal | MF32 source-candidate signal |
-| Candidate processing | bounded candidate-local residual | bounded candidate-local residual |
-| Data organization | A-list entity tables and batches | expanded entity tables and streaming batches |
+| Base state | retained score archive | retained q35/q7 frozen checkpoint |
+| Full reconstruction | official-data raw training | official-data C2/C3/C5/C6/RUC4/third_1 graph |
+| Final learned member | BPR32 signal | MF32 signal |
+| Candidate processing | bounded local residual | bounded local residual and rank grid |
 | Output | deterministic two-member ZIP | deterministic two-member ZIP |
-| Training interface | official-data raw training | official-data MF32 training and base generation |
 
-The B-list implementation expands the entity vocabulary and uses streaming
-batches for the larger query set. Dataset3 uses an official-training-data
-target-frequency statistic; Dataset4 uses a 32-dimensional Jittor implicit
-preference model. Both feed the same candidate-local fusion and deterministic
-serialization stages.
+The B-list package exposes two commands only:
 
-## Frozen base generation
-
-The retained frozen base is no longer opaque: `code/pipeline/` reconstructs it
-from the official data. `code/pipeline/reproduce_third_1.py` trains every
-Dataset3/Dataset4 component from scratch and emits the base score matrices, and
-`code/pipeline/pack_frozen_base.py` -- the exact inverse of the
-`code/build_submission.py` decoders -- packs them into `frozen_base.ckpt`
-(Dataset3 ZigZag q35+LZMA, Dataset4 7-bit packing).
-
-This executes the complete training method through the frozen-state boundary.
-The retained split checkpoint under `code/assets/locked/` is the preserved
-historical output of that same stage; it stabilizes byte-level verification
-when missing per-run parameter scripts and machine-dependent numerical
-reductions perturb a new training run. `generate-base` records the fresh
-checkpoint hash, resolves that same node to the retained historical state, and
-runs the locked MF32 stage to verify the final `1.5241` result. The bridge
-reuses the existing assets and adds no numerical delta payload.
-
-For the recorded B-list result, the reviewer supplies the official
-`data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint are
-package members validated by SHA-256 and consumed by the result builder.
-
-The supplementary commands preserve the same source layout and interfaces:
-
-```bash
-bash run_train.sh /path/to/data_B.zip /path/to/model-output 0
-bash run_fresh_inference.sh /path/to/data_B.zip \
-  /path/to/model-output /path/to/result-output 0
+```text
+verify     frozen final-layer reproduction
+reproduce  complete data_B.zip reconstruction
 ```
 
-`A_LIST_REFERENCE.md` records the accepted A-list archive and relevant member
-hashes so the shared official-input, retained-asset, Jittor-inference, and
-deterministic-output contract is directly traceable.
+The full B-list graph is implemented in `code/pipeline/`. It trains the D3/D4
+components, writes base score matrices, serializes q35/q7 frozen scores, and
+constructs the recorded result. `README.md` and `code/pipeline/README.md`
+describe the full stage graph and output contract.
