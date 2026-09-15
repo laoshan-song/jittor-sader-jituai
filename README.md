@@ -61,22 +61,21 @@ python B/code/main.py reproduce \
 
 ## Architecture
 
-任务不是全库召回，而是在每条查询给定的 100 个候选中排序。所有模型共享
-三条边界：历史只取查询时刻以前；测试标签不可见；校准只在当前候选行内进行。
+任务不是全库召回，而是在每条查询给定的 100 个候选中排序。A/B 榜使用
+同一套算法骨架，差异只来自数据方向：实体关系、可用时间字段、历史密度、
+样本规模和官方输出格式。所有实例共享三条边界：历史只取查询时刻以前；
+测试标签不可见；校准只在当前候选行内进行。
 
 ```mermaid
 flowchart TB
-    Q["官方历史 + 查询时刻 + 100 个候选"] --> C["因果历史与候选特征"]
-    C --> A1["A 榜 D1<br/>图统计 + 短期注意力"]
-    C --> A2["A 榜 D2<br/>VAE / BPR / Set / Transformer"]
-    C --> B3["B 榜 D3<br/>图集成 + 结构链 + Set Transformer"]
-    C --> B4["B 榜 D4<br/>Temporal / MF / Pair + Meta Ranker"]
-    A1 --> CA["候选内结构校正"]
-    A2 --> CA
-    B3 --> CB["候选内有界残差"]
-    B4 --> CB
-    CA --> ZA["A/result.zip"]
-    CB --> ZB["B/result.zip"]
+    A["A: D1 / D2 数据接口"] --> H["因果历史编码"]
+    B["B: D3 / D4 数据接口"] --> H
+    H --> E["Jittor 基座专家"]
+    E --> C["100 候选集合上下文"]
+    C --> F["qnorm 多成员融合"]
+    F --> R["低幅度结构残差"]
+    R --> O["数据集输出头"]
+    O --> Z["确定性 result.zip"]
 ```
 
 不同成员先在每行内部标准化，避免某个模型仅因分数尺度较大而主导融合：
@@ -90,8 +89,31 @@ flowchart TB
 \right)}.
 ```
 
+统一算法可以写成：
+
+```math
+S(s,C_t)=
+\operatorname{Fuse}_m
+\left[
+\operatorname{qnorm}
+\bigl(f_m(H_{\le t},s,C_t)\bigr)
+\right]
++\lambda\,r(H_{\le t},s,C_t),
+```
+
+其中 `H` 是因果历史，`C_t` 是当前 100 候选，`f_m` 是同一候选排序框架下
+的数据适配专家，`r` 是候选内结构残差。A/B 榜只替换数据接口与专家配置，
+不改变“历史编码—候选打分—集合交互—残差融合—确定性输出”主链。
+
+| 对齐关系 | A 榜实例 | B 榜数据适配 | 保持不变 |
+| --- | --- | --- | --- |
+| 图方向 | D1 图统计与 embedding 排序 | D3 扩大成员数，并细化时间/session 支持 | 同一 `MLP + embedding + history` 基座与候选内融合 |
+| 稀疏方向 | D2 VAE/BPR/Set/Transformer 专家 | D4 按更长历史和更大规模配置 Temporal/MF/Pair/Meta 专家 | 同一多专家、集合上下文与相对排序目标 |
+| 后处理 | `qnorm` 后输出概率 | `qnorm` 后输出 rank grid | 候选身份、候选列与行内次序契约 |
+| 工程 | 单机批处理 | 流式 cache、分块推理、更多种子 | Jittor、官方数据、无测试标签、哈希审计 |
+
 <a id="a-list"></a>
-## A 榜：D1 / D2
+## A 榜：统一算法的 D1 / D2 实例
 
 ### Dataset1 (D1)：图统计与候选条件注意力
 
@@ -164,9 +186,10 @@ Dataset1 的来源支持规则只在“最大支持至少 4 且领先第二名�
 [`A/README.md`](A/README.md)。
 
 <a id="b-list"></a>
-## B 榜：D3 / D4
+## B 榜：统一算法的 D3 / D4 数据适配
 
-B 榜不是一份冻结结果说明，而是一条从官方数据开始的可执行训练图：
+B 榜沿用 A 榜的候选排序主链，只把专家规模、时间窗口、结构特征和输出头
+适配到 Dataset3/Dataset4，并提供从官方数据开始的可执行训练图：
 
 ```mermaid
 flowchart TB
