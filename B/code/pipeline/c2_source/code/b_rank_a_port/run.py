@@ -42,8 +42,6 @@ def set_seed(seed):
 
 
 DATA = "data_A.zip"
-# Audit reference only. It is never used as a training label or blended into submissions.
-TEACHER = "1.4351/result.zip"
 BASE = 1 << 32
 RAW_DIM = 22
 SRC_FREQ_DIM = 24
@@ -1870,30 +1868,6 @@ def submit(batch, use_prop=True, use_rank=True):
         write_scene(zout, "dataset4", batch, use_prop, use_rank)
 
 
-def audit_pair(student_zip="result.zip", teacher_zip=TEACHER):
-    # Drift audit only: compares with the 1.4351 reference package, but never feeds it into training.
-    for scene in ["dataset3", "dataset4"]:
-        with zipfile.ZipFile(student_zip) as zs, zipfile.ZipFile(teacher_zip) as zt:
-            s_lines = zs.open(f"{scene}.csv")
-            t_lines = zt.open(f"{scene}.csv")
-            n = agree = 0
-            rr = top10 = 0.0
-            for sl, tl in zip(s_lines, t_lines):
-                sp = np.fromstring(sl.decode().strip(), sep=",", dtype=np.float32)
-                tp = np.fromstring(tl.decode().strip(), sep=",", dtype=np.float32)
-                st = int(sp.argmax())
-                tt = int(tp.argmax())
-                agree += st == tt
-                rank = int(np.where(np.argsort(-sp) == tt)[0][0]) + 1
-                rr += 1.0 / rank
-                top10 += len(set(np.argsort(-sp)[:10]) & set(np.argsort(-tp)[:10])) / 10.0
-                n += 1
-            print(
-                f"{scene}: top1_agree={agree/n:.4f} "
-                f"teacher_top1_rr={rr/n:.4f} top10_overlap={top10/n:.4f}",
-                flush=True,
-            )
-
 
 def check():
     print("jittor", jt.__version__, "cuda", bool(jt.has_cuda and jt.flags.use_cuda))
@@ -1904,7 +1878,7 @@ def check():
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("mode", choices=["all", "train", "rank", "submit", "check", "audit"], nargs="?", default="all")
+    p.add_argument("mode", choices=["all", "train", "rank", "submit", "check"], nargs="?", default="all")
     p.add_argument("--groups1", type=int, default=40000)
     p.add_argument("--groups2", type=int, default=70000)
     p.add_argument("--epochs", type=int, default=16)
@@ -1936,9 +1910,6 @@ def main():
 
     if args.mode == "check":
         check()
-        return
-    if args.mode == "audit":
-        audit_pair()
         return
     if args.mode in ("all", "train"):
         s1 = fit_scene(
