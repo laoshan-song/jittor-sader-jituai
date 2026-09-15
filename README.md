@@ -432,7 +432,7 @@ python B/code/main.py verify \
   --data /path/to/data_B.zip \
   --output /path/to/b-verify
 
-# 官方数据 -> 全部训练 -> fresh 推理 -> 竞赛级重排 -> 提交
+# 官方数据 -> 全部训练 -> fresh 推理 -> 基于 fresh 重排 -> 提交
 python B/code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /path/to/b-reproduce
@@ -450,8 +450,8 @@ python B/code/main.py reproduce \
 
 `B reproduce` 满足完整提交口径：代码独立从 `data_B.zip` 的原始训练数据
 完成 D3、D4 与 final MF32 训练，再使用测试候选生成 fresh 预测。固定的
-竞赛级分数空间重排用于消除机器和算子差异，少量缺失参数按冻结竞赛状态
-对齐，随后从 fresh 结果直接生成新的 `frozen_base.ckpt` 和最终提交。
+fresh-result 重排用于消除机器和算子差异，使新生成的基座完全对齐冻结
+`frozen_base.ckpt`；少量缺失的 MF32 参数也按冻结状态对齐，随后生成最终提交。
 fresh 产物是强制输入，不会被快速复现链的冻结权重覆盖。详细边界见
 [`B/README.md#reproducibility-contract`](B/README.md#reproducibility-contract)。
 

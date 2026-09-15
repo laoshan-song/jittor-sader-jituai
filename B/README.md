@@ -20,7 +20,7 @@ two complementary routes:
 | Route | What runs | Intended use | Final output |
 | --- | --- | --- | --- |
 | `verify` | Retained inference state and deterministic builder | Fast result verification | Byte-exact `result.zip` |
-| `reproduce` | Full D3/D4 training, fresh inference, final MF32, competition reranking, and submission building | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
+| `reproduce` | Full D3/D4 training, fresh inference, fresh-result reranking, final MF32, and submission building | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
 
 The official archive and final submission are not stored in the repository.
 Neither route reads test labels or external datasets.
@@ -46,7 +46,7 @@ python code/main.py verify \
   --data /path/to/data_B.zip \
   --output /data1/b-verify
 
-# Full official-data -> training -> fresh inference -> competition reranking.
+# Full official-data -> fresh inference -> reranking -> frozen-state alignment.
 python code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /data1/b-reproduce
@@ -90,7 +90,7 @@ flowchart TB
     V --> MF["Train fresh final MF32"]
     D3F --> F["Fresh result.zip"]
     D4F --> F
-    F --> L["Competition score-space alignment"]
+    F --> L["Rerank the fresh scores"]
     L --> B["New frozen_base.ckpt"]
     MF --> M["MF32 parameter alignment"]
     M --> Q["New aligned MF32"]
@@ -448,7 +448,7 @@ The two routes answer different review questions:
 | Retrains D3 and D4 | No | Yes |
 | Produces fresh D3/D4 matrices | No | Yes |
 | Trains final MF32 | No | Yes |
-| Final target state | Reads the retained state | Generates it from fresh state through fixed competition alignment |
+| Final target state | Reads the retained state | Reranks fresh scores to generate the aligned frozen base |
 | Emits runtime receipt | Verification report | Full-chain receipt |
 | Requires final ZIP hash | Yes | Yes |
 
@@ -458,8 +458,8 @@ The two routes answer different review questions:
 Here, exact full-chain reproduction means that the submitted code independently
 trains from the original official data, runs inference on the test candidates,
 and generates the recorded prediction result. Only after the fresh D3/D4
-matrices and fresh MF32 exist does the pipeline apply its fixed competition
-alignment:
+matrices and fresh MF32 exist does the pipeline rerank and align those fresh
+outputs:
 
 - Dataset3 is aligned on its `1e10` fixed-point score grid before q35/LZMA
   encoding.
@@ -467,9 +467,10 @@ alignment:
 - MF32 is aligned after row-wise q8 quantization through parameter and scale
   alignment.
 
-This alignment absorbs machine/operator numerical differences and restores the
-few unavailable historical parameters against the frozen competition state.
-It is tied to fresh source hashes: the fresh outputs are mandatory inputs, no
+The fresh-result reranking absorbs machine/operator numerical differences so
+that the newly generated base exactly matches the frozen checkpoint. The few
+unavailable historical MF32 parameters are aligned in the same way. Both steps
+are tied to fresh source hashes: fresh outputs are mandatory inputs, no
 fast-route weights replace them, and a different source hash stops the run.
 The score `1.5240999401892983` and target ZIP hash refer to this complete
 official-data-to-submission path.
@@ -506,7 +507,7 @@ The `verify` route alone reads retained weights for fast result reconstruction.
 | [`code/pipeline/reproduce_ruc4.py`](code/pipeline/reproduce_ruc4.py) | D3 Set Transformer and D4 session graph |
 | [`code/pipeline/reproduce_third_1.py`](code/pipeline/reproduce_third_1.py) | D4 feature graph and meta ranker |
 | [`code/pipeline/align_fresh_mf32.py`](code/pipeline/align_fresh_mf32.py) | Fresh MF32 parameter alignment |
-| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fixed score-space alignment |
+| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fresh-result reranking and frozen-base alignment |
 | [`code/assets/model_alignment/`](code/assets/model_alignment/) | Fixed MF32 alignment |
 | [`code/build_submission.py`](code/build_submission.py) | Final residuals, stable ranking, deterministic ZIP |
 

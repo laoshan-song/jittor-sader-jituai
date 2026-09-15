@@ -3,7 +3,7 @@
 
 This is the serialization link between the B-list training graph and its newly
 generated frozen intermediate. It quantizes the fresh score matrices generated
-by ``reproduce_third_1.py``, applies the fixed competition score alignment, and
+by ``reproduce_third_1.py``, reranks them into the frozen score space, and
 writes the checkpoint schema consumed by the final candidate-local reranker.
 
 The two encoders are the exact inverse of ``code/build_submission.py``:
@@ -370,7 +370,7 @@ def pack(
         "dataset4_rows": d4_rows,
         "width": WIDTH,
         "note": (
-            "Align the fresh score matrices on the competition score grids and "
+            "Rerank the fresh score matrices onto the frozen score grids and "
             "serialize a new checkpoint without reading a retained checkpoint."
             if manifest
             else "Deterministic serialization of the fresh score matrices."

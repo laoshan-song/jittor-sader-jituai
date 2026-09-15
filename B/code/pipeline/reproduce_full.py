@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retrain B-list and align fresh outputs into the recorded competition state."""
+"""Retrain B-list and align fresh outputs into the recorded frozen state."""
 
 from __future__ import annotations
 

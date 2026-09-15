@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Align a freshly trained MF32 checkpoint to the recorded competition state."""
+"""Align a freshly trained MF32 checkpoint to the recorded frozen state."""
 
 from __future__ import annotations
 
