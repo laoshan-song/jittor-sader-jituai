@@ -1,20 +1,23 @@
-# jittor-sader-jituai
+<h1 align="center">基于 Jittor 的时序图候选排序</h1>
+
+<p align="center">
+  <strong>赛道一 · A 榜第 7 名 · B 榜第 2 名</strong>
+</p>
 
 > 一条边发生之后，下一条边会走向哪里？
 
-赛道一时序图推荐方案：**A 榜第 7 名，B 榜第 2 名**。仓库包含
-Jittor 训练源码、推理链路、模型状态、审计工具与确定性提交构建器。
+`jittor-sader-jituai` 保留了算法实现、训练与推理链路、结果重建和审计工具。
 
 [![Jittor](https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square)](https://github.com/Jittor/jittor)
 [![Python](https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square)](https://www.python.org/)
-[![Track](https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square)](#architecture)
+[![Track](https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square)](#competition)
 
 <p align="center">
-  <a href="#quick-start">快速开始</a> ·
-  <a href="#architecture">整体架构</a> ·
-  <a href="#a-list">A 榜算法</a> ·
-  <a href="#b-list">B 榜算法</a> ·
-  <a href="#reproducibility">复现边界</a>
+  <a href="#competition">赛题说明</a> ·
+  <a href="#jittor">Jittor 落点</a> ·
+  <a href="#a-list">A 榜具体方案</a> ·
+  <a href="#b-list">B 榜具体方案</a> ·
+  <a href="#reproduce">复现入口</a>
 </p>
 
 <p align="center">
@@ -23,253 +26,145 @@ Jittor 训练源码、推理链路、模型状态、审计工具与确定性提�
   </a>
 </p>
 
-一句话概括：给定来源、时间和 100 个候选，让历史交互描述长期偏好，
-让时序注意力捕获短期意图，让候选集合内部互相比较，最后输出稳定、
-可审计的候选排序。
+<a id="competition"></a>
+## 1. 赛题说明
 
-| 排名 | 数据集 | 主要模型 | 复现入口 |
-| --- | --- | --- | --- |
-| A 榜第 7 | Dataset1 / Dataset2 | 图特征排序、VAE/BPR、集合模型、结构残差 | [`A/README.md`](A/README.md) |
-| B 榜第 2 | Dataset3 / Dataset4 | 九成员图集成、时序/MF/Pair 专家、Set Transformer、元排序 | [`B/README.md`](B/README.md) |
+赛道一研究**时序交互图上的下一目标预测**。训练数据由按时间发生的
+`(src, dst, time)` 交互边组成；测试时，每条查询给出来源节点、必要的时间字段
+以及固定的 100 个候选目标。模型不需要从全体节点召回，只需要回答：
+**真实目标在这 100 个候选中应排第几。**
 
-## Quick Start
+### 一个具体例子
 
-B 榜提供两条职责明确的公开链路：
+假设测试集中有一条查询：
 
-```bash
-# 快速验证：保留推理状态 -> 确定性提交
-python B/code/main.py verify \
-  --data /path/to/data_B.zip \
-  --output /path/to/verify \
-  --gpu 0
-
-# 全链路：官方数据 -> 全部训练 -> fresh 推理 -> 目标状态重建 -> 提交
-python B/code/main.py reproduce \
-  --data /path/to/data_B.zip \
-  --output /path/to/reproduce \
-  --gpu 0
-```
-
-| 入口 | 是否重训 | 是否生成 fresh 中间结果 | 用途 |
-| --- | ---: | ---: | --- |
-| `verify` | 否 | 否 | 快速、字节级验证历史提交 |
-| `reproduce` | 是 | 是 | 从 `data_B.zip` 检查完整训练与推理链 |
-
-环境、数据哈希与运行命令见
-[`B/README.md#quick-start`](B/README.md#quick-start)。A 榜入口与 raw training
-说明见 [`A/README.md`](A/README.md)。
-
-## Architecture
-
-任务不是全库召回，而是在每条查询给定的 100 个候选中排序。A/B 榜使用
-同一套算法骨架，差异只来自数据方向：实体关系、可用时间字段、历史密度、
-样本规模和官方输出格式。所有实例共享三条边界：历史只取查询时刻以前；
-测试标签不可见；校准只在当前候选行内进行。
-
-```mermaid
-flowchart TB
-    A["A: D1 / D2 数据接口"] --> H["因果历史编码"]
-    B["B: D3 / D4 数据接口"] --> H
-    H --> E["Jittor 基座专家"]
-    E --> C["100 候选集合上下文"]
-    C --> F["qnorm 多成员融合"]
-    F --> R["低幅度结构残差"]
-    R --> O["数据集输出头"]
-    O --> Z["确定性 result.zip"]
-```
-
-不同成员先在每行内部标准化，避免某个模型仅因分数尺度较大而主导融合：
-
-```math
-\mathrm{qnorm}(x_{i,j})=
-\frac{x_{i,j}-\mu_i}
-{\max\left(
-\sqrt{\frac{1}{100}\sum_{k=1}^{100}(x_{i,k}-\mu_i)^2},
-10^{-6}
-\right)}.
-```
-
-统一算法可以写成：
-
-```math
-S(s,C_t)=
-\mathrm{Fuse}_m
-\left[
-\mathrm{qnorm}
-\bigl(f_m(H_{\le t},s,C_t)\bigr)
-\right]
-+\lambda\,r(H_{\le t},s,C_t),
-```
-
-其中 `H` 是因果历史，`C_t` 是当前 100 候选，`f_m` 是同一候选排序框架下
-的数据适配专家，`r` 是候选内结构残差。A/B 榜只替换数据接口与专家配置，
-不改变“历史编码—候选打分—集合交互—残差融合—确定性输出”主链。
-
-| 对齐关系 | A 榜实例 | B 榜数据适配 | 保持不变 |
-| --- | --- | --- | --- |
-| 图方向 | D1 图统计与 embedding 排序 | D3 扩大成员数，并细化时间/session 支持 | 同一 `MLP + embedding + history` 基座与候选内融合 |
-| 稀疏方向 | D2 VAE/BPR/Set/Transformer 专家 | D4 按更长历史和更大规模配置 Temporal/MF/Pair/Meta 专家 | 同一多专家、集合上下文与相对排序目标 |
-| 后处理 | `qnorm` 后输出概率 | `qnorm` 后输出 rank grid | 候选身份、候选列与行内次序契约 |
-| 工程 | 单机批处理 | 流式 cache、分块推理、更多种子 | Jittor、官方数据、无测试标签、哈希审计 |
-
-<a id="a-list"></a>
-## A 榜：统一算法的 D1 / D2 实例
-
-### Dataset1 (D1)：图统计与候选条件注意力
-
-[`A/code/raw_training/dataset1/run.py`](A/code/raw_training/dataset1/run.py)
-先按时间稳定排序训练边，只使用查询以前的历史构造特征：
-
-| 特征组 | 内容 |
+| 查询元素 | 示例 |
 | --- | --- |
-| 节点统计 | 来源/目标累计次数、入度、出度、首次与最近交互 |
-| 二元关系 | 来源—目标对频次、最近一次交互、候选池出现频率 |
-| 局部图 | 最近邻居、入/出邻居重叠、共同邻居 |
-| 时间 | 小时、星期、时间间隔与单调新近度 |
+| 来源节点 | 用户/节点 `42` |
+| 查询时刻 | `10:30` |
+| 官方候选 | `[13, 7, 88, 21, 5, ...]`，共 100 个 |
+| 可见历史 | `42 -> 13` 发生在 5 分钟前；`42 -> 7` 发生在 3 天前 |
 
-基础 `Net` 将统计特征送入 `dim -> 128 -> 64 -> 1` 的 Jittor MLP，
-同时学习来源—目标 embedding 内积和两侧偏置：
+模型只能读取 `10:30` 以前的边。时序特征会认为候选 `13` 更近期，embedding
+会判断 `42` 与各候选的长期兼容性，集合模型再比较这 100 个候选的相对关系。
+例如模型输出：
 
-```math
-s_{\mathrm{D1}}(s,c)=
-\mathrm{MLP}(x_{s,c})
-+\langle e_s,e_c\rangle+b_s+b_c.
+```text
+候选列: [13,   7,   88,  21,  5,   ...]
+模型分: [0.82, 0.47, 0.09, 0.31, 0.18, ...]
+排序结果: 13 > 7 > 21 > 5 > 88 > ...
 ```
 
-`NetAttn` 让每个候选分别查询来源的近期目标序列，而不是对历史做一次固定平均：
+提交时仍按官方候选列顺序写回 100 个数，不能把候选重新排成另一组，也不能
+加入候选集合以外的节点。
+
+设第 `i` 条查询为来源 `s_i`、查询时刻 `t_i` 和候选集合
+`C_i={c_i1,...,c_i100}`，模型为每个候选产生分数：
 
 ```math
-\alpha_j(c)=\mathrm{softmax}_j
-\left(
-\frac{\langle W_qe_c,W_ke_{h_j}\rangle}{\sqrt d}
--w_t\Delta t_j
-\right),
-\qquad
-h_s(c)=\sum_j\alpha_j(c)W_ve_{h_j}.
+z_{i,j}=f(H_{\le t_i},s_i,c_{i,j},C_i),
+\qquad j=1,\ldots,100.
 ```
 
-训练样本固定为“1 个正目标 + 99 个候选池负例”，直接优化组内交叉熵。
-两个固定种子独立训练并集成，减少初始化对候选次序的影响。
+其中 `H_{\le t_i}` 只包含查询时刻以前的历史。训练与验证代码使用候选内排序
+和 MRR 检查模型是否把真实目标推向前列；提交文件保持 100 列与官方候选逐列
+对应。
 
-### Dataset2 (D2)：稀疏偏好与集合建模
+| 榜单 | 官方数据 | 数据集 | 提交矩阵 | 输出形式 |
+| --- | --- | --- | ---: | --- |
+| A 榜 | `data_A.zip` | Dataset1 | `61,051 x 100` | 候选概率 |
+| A 榜 | `data_A.zip` | Dataset2 | `153,420 x 100` | 候选概率 |
+| B 榜 | `data_B.zip` | Dataset3 | `157,670 x 100` | 候选分数 |
+| B 榜 | `data_B.zip` | Dataset4 | `2,322,538 x 100` | 固定 rank grid |
 
-Dataset2 使用按时间端点切分的 CSR 历史。不同成员从互补角度解释同一行候选：
+记录成绩分别为 A 榜 `1.521072794155721`、B 榜
+`1.5240999401892983`。
 
-| 成员 | 核心机制 | 训练目标 |
-| --- | --- | --- |
-| MultVAE | 稀疏历史的变分重构，KL 退火 | 重构候选偏好 |
-| RecVAE | 残差编码器与历史先验 | 重构 + 先验约束 |
-| BM25-BPR | 时间衰减、BM25 权重、来源/目标 embedding | `softplus(-(positive-negative))` |
-| pool / set | 候选池统计与无序集合上下文 | 100 候选组内分类 |
-| multi-slice set | 多个历史时间切片 | 跨时间尺度集合比较 |
-| Transformer | 候选间自注意力 | 候选条件重排 |
-| warm residual | 热节点上的低幅度残差 | 补充而非替代基座 |
-
-最终后处理包含两个稀疏结构信号：
-
-1. 精确 `(src, time)` 组中，其他查询行是否支持该候选；
-2. 同时刻跨来源用户对的 BPR embedding 是否进入余弦相似度前 10%。
-
-```math
-z=
-\mathrm{qnorm}(\log p_{\mathrm{base}})
-+0.05\,\mathrm{qnorm}(\mathbb{1}_{\mathrm{exact\ support}})
-+0.02\,\mathrm{qnorm}(\mathbb{1}_{\mathrm{community\ top10\%}}),
-```
-
-```math
-p=\mathrm{softmax}_{100}(z).
-```
-
-Dataset1 的来源支持规则只在“最大支持至少 4 且领先第二名至少 2 行”时触发，
-并保持其余候选的相对次序。完整尺寸、CRC 与成员哈希约束见
-[`A/README.md`](A/README.md)。
-
-<a id="b-list"></a>
-## B 榜：统一算法的 D3 / D4 数据适配
-
-B 榜沿用 A 榜的候选排序主链，只把专家规模、时间窗口、结构特征和输出头
-适配到 Dataset3/Dataset4，并提供从官方数据开始的可执行训练图：
+四个数据集共享同一条算法主链，A/B 榜只做数据方向适配：
 
 ```mermaid
 flowchart TB
-    X["data_B.zip"] --> C2["C2 基座专家"]
-    C2 --> C3["C3 多尺度"]
-    C3 --> C5["C5 session ring"]
-    C5 --> C6["C6 tie group"]
-    C6 --> R["RUC4"]
-    R --> T["third_1"]
-    T --> F["fresh D3 / D4"]
-    X --> M["final MF32"]
-    F --> S["确定性构建"]
-    M --> S
-    S --> Z["result.zip"]
+    I["01  官方历史 + 当前 100 候选"] --> H["02  因果历史编码"]
+    H --> E["03  Jittor 候选打分专家"]
+    E --> C["04  候选集合上下文"]
+    C --> F["05  候选内 qnorm 与多成员融合"]
+    F --> R["06  低幅度结构残差"]
+    R --> O["07  概率 / rank-grid 输出头"]
+    O --> Z["08  dataset*.csv -> result.zip"]
+
+    classDef input fill:#e8f1ff,stroke:#2563eb,color:#111827,stroke-width:2px,font-size:16px;
+    classDef model fill:#eaf8ef,stroke:#15803d,color:#111827,stroke-width:2px,font-size:16px;
+    classDef output fill:#fff4dd,stroke:#d97706,color:#111827,stroke-width:2px,font-size:16px;
+    class I,H input;
+    class E,C,F,R model;
+    class O,Z output;
 ```
 
-### Dataset3 (D3)：九成员图集成与结构残差链
+**不变的部分**
 
-#### 1. 基座：`raw / cf / hist_cf x 3 seeds`
+- 只使用官方历史、来源、时间和候选结构，不读取测试标签，不引入外部数据。
+- 所有学习成员都在 Jittor 中训练和前向，比较范围始终是当前 100 个候选。
+- 不同成员先做候选内尺度对齐，再进行融合和低幅度结构校正。
+- 输出固定候选列、固定序列化规则和 SHA-256 审计。
 
-三种模型变体分别使用基础图统计、五个二部图邻居重叠 CF 特征，以及
-近期目标 embedding 的 masked mean；
-每种变体以 `20260810 / 20260811 / 20260812` 三个种子训练，共九个成员。
-每个成员都包含 scene model 与 FastRanker，再由
-[`fit_ensemble.py`](B/code/pipeline/c2_source/code/b_rank_a_port/fit_ensemble.py)
-组成 31 路候选：四个独立启发式，加上每个训练成员的 base、FastRanker
-和传播 embedding 分数。在 `meta_train` 拟合凸组合后，`validation`
-可以保留该组合或选择更强的单分量，最后由 `confirmation` 独立确认。
+**只因数据而变化的部分**
 
-主干分数同时表达图统计、稳定兼容性和短期兴趣：
+- Dataset1/3 更偏向共享节点空间中的图邻域、来源历史和 session 支持。
+- Dataset2/4 更偏向稀疏交互、时间切片、隐式反馈和候选集合关系。
+- B 榜数据规模更大，因此增加种子数、历史窗口、流式 cache 和分块推理。
+- A 榜输出候选概率；B 榜 Dataset4 按官方接口写入固定 rank grid。
 
-```math
-s_3(s,c)=
-\mathrm{MLP}(x_{s,c})
-+\langle e_s,e_c\rangle+b_s+b_c
-+0.7\langle \bar h_s,e_c\rangle,
-```
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="https://commons.wikimedia.org/wiki/File:Barabasi_Albert_model.gif">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/48/Barabasi_Albert_model.gif" alt="Barabasi Albert 网络生长" width="440">
+      </a>
+      <br>
+      <sub><b>网络生长</b>：新交互不断改变节点的局部结构与热度。</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="https://commons.wikimedia.org/wiki/File:Social_graph.gif">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/d/de/Social_graph.gif" alt="社交图逐步展开" width="440">
+      </a>
+      <br>
+      <sub><b>关系展开</b>：来源、目标和历史共同形成候选排序上下文。</sub>
+    </td>
+  </tr>
+</table>
 
-```math
-\bar h_s=
-\frac{\sum_j m_j e_{h_j}}
-{\sum_j m_j+10^{-6}}.
-```
+<a id="jittor"></a>
+## 2. Jittor 用在哪里
 
-`hist_cf` 历史分支的核心实现：
+Jittor 不是包装层，而是项目中所有神经网络训练和前向计算的核心框架。
+NumPy、Pandas 和 Numba 负责 CSV 解析、图统计、索引与确定性序列化；
+可学习参数、自动求导、优化器、损失函数和 GPU 前向都由 Jittor 执行。
 
-```python
-mlp = self.layers(x).squeeze(-1)
-dst_vec = self.dst_emb(dst)
-dot = (self.src_emb(src) * dst_vec).sum(dim=1) * self.emb_scale
-if self.use_hist and hist_ids is not None and hist_mask is not None:
-    hmask = hist_mask.unsqueeze(-1)
-    hvec = (self.dst_emb(hist_ids) * hmask).sum(dim=1)
-    hvec = hvec / (hmask.sum(dim=1) + 1e-6)
-    dot = dot + (hvec * dst_vec).sum(dim=1) * self.hist_scale
-bias = self.src_bias(src).squeeze(-1) + self.dst_bias(dst).squeeze(-1)
-return mlp + dot + bias
-```
-
-#### 2. C2 到 RUC4：逐层加入可解释结构
-
-| 阶段 | 输入信号 | 对候选排序做什么 |
+| Jittor 能力 | A 榜位置 | B 榜位置 |
 | --- | --- | --- |
-| C2 | 同时刻跨来源支持；排除同时刻后的同来源 `+-300s` 支持 | 两段权重分别为 `0.10`、`0.05` |
-| C3 | 未见 pair 上的 `1s/300s` 方向支持 | cross-past、future-1s、future-300s、past-300s 权重为 `[-0.10, 0.225, 0.30, 0.305]` |
-| C5 | `(900s, 86400s]` session ring | 选取唯一未见最大值，past/future/sum 权重为 `[0.2625, 0.28, -0.0525]` |
-| C6 | 同一 ring 上并列的未见最大值 | 重施 C5 唯一胜者残差，并以 `0.20` 抬升 tie group |
-| RUC4 | 每个候选的基座与结构特征 | 三种子 Set Transformer，残差尺度 `0.30` |
+| `nn.Embedding`、MLP、节点偏置 | D1 图排序器 | D3 九成员图排序器、D4 MF |
+| MultVAE / RecVAE | D2 稀疏偏好重构 | 由 D4 更大规模的时序/MF 专家作数据适配 |
+| BPR 与 `softplus` 排序损失 | D2 BM25-BPR、community BPR32 | D4 implicit-MF、transition-MF |
+| `MultiheadAttention` | D2 multislice Transformer | D3 Set Transformer、D4 Pair Transformer |
+| `cross_entropy_loss` | D1/D2 候选组训练 | D3/D4 listwise、hard-negative 训练 |
+| `AdamW` 与 CUDA | 各 raw training 成员 | C2、RUC4、`third_1`、final MF32 |
 
-全链路先训练三成员 rolling-audit 网格，再以同样三个种子独立训练最终网格。
-部署成员使用 hidden 64、四头注意力、两层 Transformer、128 维 FFN 和
-八个 epoch；候选先独立编码，再让 100 个候选交换上下文：
+典型 Jittor 候选打分器同时学习来源—目标 embedding、目标偏置和候选分数：
 
 ```python
-def execute(self, values):
-    values = self.encoder(values)
-    for block in self.blocks:
-        values = block(values)
-    return self.output(values).squeeze(-1)
+class ImplicitMF(nn.Module):
+    def __init__(self, source_count, item_count, embedding_dim):
+        self.source = nn.Embedding(source_count, embedding_dim)
+        self.item = nn.Embedding(item_count, embedding_dim)
+        self.item_bias = nn.Embedding(item_count, 1)
+
+    def execute(self, source, candidates):
+        source_vector = self.source(source).unsqueeze(1)
+        item_vector = self.item(candidates)
+        return (source_vector * item_vector).sum(dim=2) + self.item_bias(candidates).squeeze(2)
 ```
+
+集合模型同样直接使用 Jittor 的多头注意力、残差连接和 LayerNorm：
 
 ```math
 H'=\mathrm{LN}(H+\mathrm{MHA}(H,H,H)),
@@ -277,7 +172,113 @@ H'=\mathrm{LN}(H+\mathrm{MHA}(H,H,H)),
 H''=\mathrm{LN}(H'+\mathrm{FFN}(H')).
 ```
 
-最终仅加入来自官方 D3 历史的低幅度目标频次项：
+主要源码入口：
+
+- A 榜 D1：[`A/code/raw_training/dataset1/run.py`](A/code/raw_training/dataset1/run.py)
+- A 榜 D2 VAE/BPR：[`train_vae_jittor.py`](A/code/raw_training/dataset2/train_vae_jittor.py) /
+  [`train_bpr_jittor.py`](A/code/raw_training/dataset2/train_bpr_jittor.py)
+- B 榜时序注意力：[`temporal_attention_jittor.py`](B/code/pipeline/code/b_rank/temporal_attention_jittor.py)
+- B 榜 Set Transformer：[`d3_set_transformer_v49.py`](B/code/pipeline/code/ruc3/d3_set_transformer_v49.py)
+- B 榜元排序器：[`train_hierarchy_jittor.py`](B/code/pipeline/code/third_1/train_hierarchy_jittor.py)
+- B 榜 final MF32：[`B/code/model.py`](B/code/model.py)
+
+<a id="a-list"></a>
+## 3. A 榜具体方案
+
+A 榜包含 Dataset1 和 Dataset2。记录结果为 **第 7 名，
+`1.521072794155721`**。详细运行协议见 [`A/README.md`](A/README.md)。
+
+### 3.1 Dataset1：时序图特征与双成员排序
+
+Dataset1 先对训练边做稳定时间排序，只使用查询以前的历史构造四组特征：
+
+| 特征组 | 内容 |
+| --- | --- |
+| 节点统计 | 来源/目标累计次数、入度、出度、首次与最近交互 |
+| 二元关系 | 来源—目标频次、最近一次交互、候选池出现频率 |
+| 局部图 | 最近邻居、入/出邻居重叠、共同邻居 |
+| 时间 | 小时、星期、时间间隔与单调新近度 |
+
+基础 `Net` 使用 `dim -> 128 -> 64 -> 1` 的 Jittor MLP，同时学习来源/目标
+embedding 和偏置：
+
+```math
+s_{\mathrm{D1}}(s,c)=
+\mathrm{MLP}(x_{s,c})
++\langle e_s,e_c\rangle+b_s+b_c.
+```
+
+生产双成员实际调用 `Net(use_hist=False, use_cf=True)`：近期性进入手工时序
+特征，额外五个二部图邻居重叠特征补充协同关系；文件中定义的 `NetAttn`
+不属于该生产调用链。训练样本固定为“1 个正目标 + 99 个候选池负例”，在每个
+候选组内计算交叉熵。两个固定种子 `20260705`、`20260715` 独立训练后集成。
+
+记录结果的 Dataset1 后处理使用同一来源的跨查询支持。只有最大支持至少为 4、
+且领先第二名至少 2 行时才触发；其余候选的相对顺序不变。
+
+### 3.2 Dataset2：稀疏偏好与候选集合建模
+
+Dataset2 将时间衰减后的历史表示为 CSR 稀疏矩阵，再从互补方向训练成员：
+
+| 成员 | 作用 | 核心目标 |
+| --- | --- | --- |
+| MultVAE / RecVAE | 重构来源的全局稀疏偏好 | 重构损失 + KL 约束 |
+| BM25-BPR | 学习正目标高于负目标 | `softplus(-(positive-negative))` |
+| pool / set | 建模候选池统计和置换不变集合上下文 | 100 候选组内分类 |
+| multislice Transformer | 融合多个历史时间切片 | 候选集合注意力 |
+| warm residual | 补充热节点行的局部误差 | 低幅度候选残差 |
+
+锁定结果在基座上加入两种可审计结构信号：
+
+1. 同一 `(src, time)` 精确组中的跨行候选支持；
+2. 同时刻、同候选的跨来源 BPR32 社区相似度。
+
+```math
+z=
+\mathrm{qnorm}(\log p_{\mathrm{base}})
++0.05\,\mathrm{qnorm}(I_{\mathrm{exact}})
++0.02\,\mathrm{qnorm}(I_{\mathrm{community}}),
+\qquad
+p=\mathrm{softmax}_{100}(z).
+```
+
+### 3.3 A 榜输出
+
+Dataset1/2 最终写入候选概率；每行保持 100 列、数值有限、候选位置不变。
+构建器检查官方数据、基座、BPR32、规则文件、CSV 成员、ZIP CRC 和最终哈希。
+
+<a id="b-list"></a>
+## 4. B 榜具体方案
+
+B 榜包含 Dataset3 和 Dataset4。记录结果为 **第 2 名，
+`1.5240999401892983`**。它沿用 A 榜“历史编码—候选打分—集合交互—
+候选内融合—低幅度残差”的算法主链，只针对数据规模和字段结构扩展成员数量、
+时间窗口、cache 和输出头。详细技术说明见 [`B/README.md`](B/README.md)。
+
+### 4.1 Dataset3：九成员图集成与结构链
+
+Dataset3 是 A 榜 Dataset1 图排序方向的数据适配。基座训练
+`raw / cf / hist_cf x 3 seeds` 共九个 Jittor 成员：
+
+| 变体 | 数据信号 |
+| --- | --- |
+| `raw` | 通用时序图统计、来源—目标 embedding |
+| `cf` | 增加 5 个二部图邻居重叠特征 |
+| `hist_cf` | 在 CF 特征上增加近期目标 embedding 的 masked mean |
+
+九个训练目录进一步产生 base、FastRanker 和传播 embedding 分数，并与四个
+独立启发式组成 31 路候选。`meta_train` 拟合凸组合，`validation` 选择组合
+或单分量，`confirmation` 独立确认。
+
+| 阶段 | 数据适配内容 | 固定策略 |
+| --- | --- | --- |
+| C2 | 同时刻跨来源、同来源 `+-300s` 支持 | 权重 `0.10`、`0.05` |
+| C3 | 未见 pair 的多尺度方向支持 | `[-0.10, 0.225, 0.30, 0.305]` |
+| C5 | `(900s, 86400s]` session ring | `[0.2625, 0.28, -0.0525]` |
+| C6 | 并列未见最大值 | tie scale `0.20` |
+| RUC4 | 100 候选集合上下文 | 3 seeds、2 blocks、4 heads、scale `0.30` |
+
+最后只加入来自官方 Dataset3 历史的低幅度目标频次项：
 
 ```math
 \mathrm{score}_3=
@@ -288,19 +289,20 @@ H''=\mathrm{LN}(H'+\mathrm{FFN}(H')).
 \right).
 ```
 
-### Dataset4 (D4)：多专家、会话图与层级元排序
+### 4.2 Dataset4：时序/MF 专家与 75 特征元排序
 
-#### 1. C2 多专家层
+Dataset4 是 A 榜 Dataset2 稀疏交互方向的数据适配。它保留多专家与候选集合
+融合框架，按更长历史和更大数据规模配置成员：
 
-| 专家族 | 数量 | 信息来源 |
+| 专家族 | 数量 | 数据作用 |
 | --- | ---: | --- |
-| history temporal | `h32 x 3`、`h64 x 3` | 最近 32/64 条因果历史 |
-| test-pool temporal | `3` | test-pool 回放下的时序历史 |
+| history temporal | `h32 x 3`、`h64 x 3` | 候选条件的近期历史注意力 |
+| test-pool temporal | `3` | test-pool 回放下的时序偏好 |
 | implicit MF | `3` | 来源—目标长期兼容性 |
 | transition-MF | `1` | 来源转移模式 |
-| pair-new Transformer | `6` | hidden `64/96`，各三个种子，候选集合残差 |
+| pair-new Transformer | `6` | hidden `64/96` 的候选集合残差 |
 
-时序专家让候选 `c` 查询历史节点 `h_j`，并直接惩罚较远的真实时间间隔：
+候选 `c` 对历史节点 `h_j` 的注意力同时考虑 embedding 相似度和真实时间间隔：
 
 ```math
 a_{c,j}=
@@ -311,81 +313,37 @@ a_{c,j}=
 \right).
 ```
 
-```math
-s_{\mathrm{temp}}=
-\langle u_s,v_c\rangle+b_c
-+\left\langle\sum_j a_{c,j}v(h_j),v_c\right\rangle
-+s_{\mathrm{exact}}+s_{\mathrm{known}}+s_{\mathrm{static}}.
-```
+RUC4 再构造 `history` / `test_pool` replay cache，训练三种子 session-graph
+hard ranker。`third_1` 将 replay、identity、baseline、temporal、MF、
+transition-MF、hierarchy 和 neighbor 合并为 75 个特征。
 
-未知历史位置在 softmax 前被 mask；显式重复次数与新近度单独进入
-`history_match`，避免 embedding 注意力独自承担重复边识别。
-
-#### 2. RUC4 会话图
-
-RUC4 分别构造 `history` 与 `test_pool` 因果 replay cache。候选特征由
-session-graph 统计、基座 `qnorm`、基座名次、top margin、seen 状态和
-静态特征组成。
-
-HardNegativeGate 为每个候选拼接三种上下文：
-
-```math
-g_i=
-\mathrm{MLP}
-\left(
-h_i,\quad
-\frac{1}{100}\sum_jh_j,\quad
-\max_j h_j
-\right).
-```
-
-训练只保留正样本尚未出现的行；候选掩码合并 30 个最高基座
-`pair_new` 候选、20 个最高图分数 `pair_new` 候选并显式加入正样本，
-两组允许重叠。三个独立种子经过双 replay 策略验证后，与
-RP3/RUC2/RUC3 信号一起形成 `third_1` 的基座。
-
-#### 3. `third_1`：75 特征元排序器
-
-元特征覆盖 replay、identity、baseline、temporal、MF、transition-MF、
-hierarchy 和 neighbor。网络将前 22 个 full-history 特征与其余 53 个
-recent/relational 特征分支编码，再加入整行候选均值上下文：
-
-为构造这组特征，全链路会重新部署 `h32/h64` 与 test-pool 时序专家，
-并训练三个 512 维 full-history MF 和一个 512 维 transition-MF；
-各成员保留独立特征平面，不会提前压成单一分数。
+元排序器分开编码前 22 个 full-history 特征与其余 53 个 recent/relational
+特征，再加入整行候选均值：
 
 ```python
 full = self.full(values[:, :, :22])
 recent = self.recent(values[:, :, 22:])
 local = self.local(jt.concat((full, recent), dim=2))
 context = local.mean(dim=1, keepdims=True)
-context = context.broadcast((local.shape[0], local.shape[1], local.shape[2]))
 score = self.output(jt.concat((full, recent, context), dim=2)).squeeze(-1)
 ```
 
-训练目标同时约束全候选分类、困难候选分类和正样本软名次：
+训练目标联合 listwise、hard-negative 和 soft-rank：
 
 ```math
 \mathcal{L}=
 0.50\,\mathcal{L}_{\mathrm{list}}
 +0.30\,\mathcal{L}_{\mathrm{hard}}
-+0.20\log
-\left(
-0.5+\sum_j
-\sigma\left(\frac{z_j-z_y}{0.25}\right)+10^{-6}
-\right).
++0.20\,\mathcal{L}_{\mathrm{soft\ rank}}.
 ```
 
-推理融合 full、候选逆序后映射回原位的 reverse，以及 no-recent
-三个视图；同时记录 full/reverse 的最大等变误差：
+推理融合 full、reverse 和 no-recent 三个视图：
 
 ```text
 meta_residual = qnorm(0.40 * full + 0.40 * reverse + 0.20 * no_recent)
 ```
 
-#### 4. final MF32 与 rank grid
-
-完整 D3/D4 fresh 结果生成后，链路独立训练 32 维隐式 MF：
+最后独立训练 32 维 implicit MF，并以 `0.02` 有界残差加入 D4 基座：
 
 ```math
 f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c,
@@ -400,29 +358,68 @@ f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c,
 \right).
 ```
 
-最终按稳定降序映射到 `linspace(1, 0, 100)`，再写回原始候选列。
-候选集合、候选身份和列位置在全程保持不变。
+稳定降序后映射到 `linspace(1, 0, 100)`，再写回原候选列。
 
-更完整的阶段入口、代码链接、训练策略和可复现契约见
-[`B/README.md`](B/README.md)。
+### 4.3 A/B 榜如何保持基本一致
 
-<a id="reproducibility"></a>
-## Reproducibility
-
-| 边界 | A 榜 | B 榜 |
+| 算法层 | A 榜 | B 榜数据方向适配 |
 | --- | --- | --- |
-| 官方数据 | `data_A.zip` | `data_B.zip` |
-| 快速链路 | 保留基座 + 确定性后处理 | 保留推理状态 + 确定性构建 |
-| 完整训练 | `code/raw_training/` | `C2 -> C3 -> C5 -> C6 -> RUC4 -> third_1 -> MF32` |
-| 数据限制 | 不读测试标签，不使用外部数据 | 不读测试标签，不使用外部数据 |
-| 输出审计 | 尺寸、有限值、成员哈希、ZIP 哈希 | 路由隔离、fresh 产物、receipt、成员哈希、ZIP 哈希 |
+| 历史编码 | 时间图统计、CSR 稀疏历史 | 增大实体索引、历史窗口和流式 cache |
+| 基座专家 | 图排序、VAE/BPR、Set/Transformer | 增加种子、Temporal/MF/Pair 容量 |
+| 候选上下文 | pool/set/Transformer | Set Transformer、session graph、meta ranker |
+| 融合 | 候选内 `qnorm` + 低幅度残差 | 同样的 `qnorm` + 有界残差 |
+| 输出头 | 候选概率 | Dataset3 分数 / Dataset4 rank grid |
+| 数据边界 | 官方历史、无测试标签 | 完全相同 |
 
-B 榜全链路先生成 fresh D3/D4 和 fresh MF32，再用密集的目标特定残差
-处理历史算子、浮点环境及中间参数缺失造成的差异，重建历史目标状态。
-该变换作用于 fresh 产物，不能用历史权重替换 fresh 结果；输入哈希不符时
-直接失败。`1.5241` 对应变换后的最终状态，并不是对未变换 fresh 中间结果
-单独测得的分数。`reproduce` 不读取 `assets/locked/`，但会读取独立保存的
-分数/参数残差；完整边界见
+所以 A/B 榜的变化不是重新定义算法，而是对数据字段、规模、历史跨度和官方
+输出接口的实例化适配。
+
+<a id="reproduce"></a>
+## 5. 复现入口
+
+先理解赛题和算法，再选择对应榜单的执行路径。
+
+### A 榜
+
+```bash
+# 快速重建记录结果
+python A/code/main.py verify \
+  --data /path/to/data_A.zip \
+  --output /path/to/a-verify
+
+# 从官方数据训练 raw Jittor 成员并执行 fresh 推理
+python A/code/main.py raw \
+  --data /path/to/data_A.zip \
+  --models /path/to/a-models \
+  --output /path/to/a-fresh
+```
+
+### B 榜
+
+```bash
+# 快速重建记录结果
+python B/code/main.py verify \
+  --data /path/to/data_B.zip \
+  --output /path/to/b-verify \
+  --gpu 0
+
+# 官方数据 -> 全部训练 -> fresh 推理 -> 目标状态重建 -> 提交
+python B/code/main.py reproduce \
+  --data /path/to/data_B.zip \
+  --output /path/to/b-reproduce \
+  --gpu 0
+```
+
+| 路径 | 训练 | 主要用途 |
+| --- | --- | --- |
+| A `verify` | 不重训 | 快速复验 A 榜记录结果 |
+| A `raw` | 重训 A 榜 raw 成员 | 审阅训练与 fresh 推理 |
+| B `verify` | 不重训 | 快速复验 B 榜记录结果 |
+| B `reproduce` | 重训 D3/D4 与 final MF32 | 打通官方数据到最终提交的完整调用链 |
+
+B 榜全链路先生成 fresh D3/D4 和 fresh MF32，再以目标特定的分数/参数残差
+处理历史算子、环境和中间参数缺失造成的确定性差异。变换必须作用于 fresh
+产物，不能用历史权重覆盖；输入哈希不符时直接失败。详细边界见
 [`B/README.md#reproducibility-contract`](B/README.md#reproducibility-contract)。
 
 最终 B 榜 `result.zip` SHA-256：
@@ -442,16 +439,18 @@ B 榜全链路先生成 fresh D3/D4 和 fresh MF32，再用密集的目标特定
 └── README.md
 ```
 
-算法说明依据 [`A/提交说明文档.pdf`](A/提交说明文档.pdf)、
-[`B/提交说明文档.pdf`](B/提交说明文档.pdf) 和仓库实际实现整理；
-源码与运行时审计结果优先于文字描述。
+算法说明以 [`A/提交说明文档.pdf`](A/提交说明文档.pdf)、
+[`B/提交说明文档.pdf`](B/提交说明文档.pdf) 和实际源码为准。
 
 <details>
-<summary>动图来源</summary>
+<summary>GIF 来源与授权</summary>
 
-首图为 Wikimedia Commons 上 Moshanin 的
-[Collaborative filtering](https://commons.wikimedia.org/wiki/File:Collaborative_filtering.gif)，
-采用 CC BY-SA 3.0。它用于解释交互关系，不是模型运行资产。
+- [Collaborative filtering](https://commons.wikimedia.org/wiki/File:Collaborative_filtering.gif)，Moshanin。
+- [Barabási–Albert model](https://commons.wikimedia.org/wiki/File:Barabasi_Albert_model.gif)，Harp。
+- [Social graph](https://commons.wikimedia.org/wiki/File:Social_graph.gif)，Festys。
+
+以上资源来自 Wikimedia Commons，采用 CC BY-SA 3.0；仅用于说明图关系，
+不是模型训练或推理资产。
 
 </details>
 
