@@ -1,11 +1,11 @@
 # A/B algorithm consistency
 
-A-list and B-list are the same algorithm on Track 1's temporal-graph
-candidate-ranking task. Both build history-only members, calibrate every model
-inside the 100-candidate row with `qnorm`, fuse with bounded candidate-local
-residuals, and serialize a deterministic two-member `result.zip`. The method,
-the candidate boundary, the fusion principle, and the audit contract are
-identical.
+A-list and B-list share the same Track 1 candidate-ranking framework. Both
+build history-only members, calibrate models inside the 100-candidate row with
+`qnorm`, fuse bounded candidate-local residuals, and serialize a deterministic
+two-member `result.zip`. Their data boundary, candidate-local fusion principle,
+Jittor implementation, and auditable output contract are shared; the concrete
+model members and reproduction mechanisms are dataset-specific.
 
 | Aspect | A list | B list | Shared design |
 | --- | --- | --- | --- |
@@ -16,15 +16,14 @@ identical.
 | Output | deterministic two-member ZIP | deterministic two-member ZIP | fixed order, fixed digits, SHA-256 |
 | Delivery | verify from retained final state | verify + full-chain fresh reproduce | fixed public interfaces and audited output |
 
-## Differences are data-scale adaptations only
+## Dataset-specific adaptations
 
-The B-list dataset is larger (more sources/items, larger query set), so the same
-algorithm is instantiated with engineering adaptations that do not change the
-model design: expanded entity vocabularies with sorted-vocabulary index mapping,
-chunked reading and streaming batches for the larger candidate volume, and more
-member seeds/stages wired through the same in-row fusion. Dataset3 expands the
+The B-list dataset is larger (more sources/items, larger query set), so the shared
+framework is instantiated with expanded entity vocabularies, sorted-vocabulary
+index mapping, chunked reading and streaming batches, and more member
+seeds/stages wired through the same in-row fusion. Dataset3 expands the
 same graph-ranking and set-model principles through nine base members and
 C2/C3/C5/C6/RUC4 stages; Dataset4 expands temporal, MF, session-graph, and meta
 members. Both feed the same candidate-local calibration and deterministic
-serialization used on the A list. These are scale adaptations, not a new task
-or candidate-ranking architecture.
+serialization used on the A list. These differences adapt the shared framework to B-list fields and scale; they
+do not change the task or candidate boundary.

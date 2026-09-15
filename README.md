@@ -4,7 +4,7 @@
 >
 > 这是 sader 团队留下的时序图推荐实验记录：赛道一 A 榜第 7 名，B 榜第 2 名。代码、模型、报告和踩坑心得都放在这里。
 
-[![Jittor](https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square)](https://github.com/Jittor/jittor) [![Python](https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square)](https://www.python.org/) [![Track](https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square)](#ab-榜算法说明与一致性)
+[![Jittor](https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square)](https://github.com/Jittor/jittor) [![Python](https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square)](https://www.python.org/) [![Track](https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square)](#-ab-榜算法说明与一致性)
 
 <p align="center">
   <a href="https://commons.wikimedia.org/wiki/File:Collaborative_filtering.gif">
@@ -18,6 +18,13 @@
 | --- | --- | --- |
 | `A/` | A 榜完整复现包、训练源码、冻结工件和技术报告 | `A/README.md` |
 | `B/` | B 榜复现包、完整训练链路、流式推理和技术报告 | `B/README.md` |
+
+B 榜两个公开入口：
+
+```bash
+python B/code/main.py verify --data /path/to/data_B.zip --output /path/to/verify --gpu 0
+python B/code/main.py reproduce --data /path/to/data_B.zip --output /path/to/reproduce --gpu 0
+```
 
 官方数据和最终结果包不随仓库提供；复现所需的源码、模型状态与数值一致性资产按各榜 `MANIFEST.sha256` 纳入审计。
 
@@ -33,7 +40,7 @@
 
 最后一个教训来自 ZIP。内容相同，压缩时间戳不同，SHA-256 也会不同。比赛交付的最后一公里，同样需要算法思维：固定顺序、固定小数位、固定 CRC，结果才真正可复现。
 
-这份仓库更像一张比赛地图。进入 A/B 榜后，可以选择快速 `verify` 或完整 `reproduce`；两条路径都先执行各自的包审计。
+这份仓库更像一张比赛地图。A 榜提供 `verify` 与 raw training；B 榜并列提供快速 `verify` 和完整 `reproduce`，各入口都先执行对应的包审计。
 
 ## 🫧 图推荐动图角落
 
@@ -74,7 +81,7 @@
 两榜都遵循同一条数据边界：
 
 - 训练和统计只使用官方历史交互，并按时间先后构造历史，避免未来边进入当前查询的特征。
-- 快速路径读取保留的推理状态；全链路路径重新训练模型并保留 fresh 中间产物。
+- A 榜的快速路径读取保留状态，raw training 单独提供；B 榜的全链路路径重新训练模型并保留 fresh 中间产物。
 - 不读取测试集真实标签，不使用外部数据，也不把候选集合之外的节点引入单条查询的比较。
 
 模型输出通常先是未归一化分数。为了让不同模型的数值尺度可以融合，代码在每一行的 100 个候选内部做标准化：
