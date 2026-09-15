@@ -219,16 +219,16 @@ def main() -> int:
         raise ValueError("Jittor import is absent")
     readme = (root / "README.md").read_text(encoding="utf-8")
     required_readme_text = (
-        "Public commands",
-        "Frozen final-layer reproduction",
-        "Full-chain reproduction",
+        "verify",
+        "reproduce",
+        "Frozen algorithm",
         "Ubuntu 22.04",
         "CUDA 12.4",
         "Python 3.10",
         "Jittor 1.3.10.0",
         "python -m pip install -r requirements.txt",
         "Data boundary",
-        "official `data_B.zip`",
+        "data_B.zip",
         TARGET_SHA256,
     )
     if any(value not in readme for value in required_readme_text):

@@ -2,7 +2,7 @@
 
 > 一条边发生之后，下一条边会走向哪里？
 >
-> 这是 sader 团队留下的时序图推荐实验记录：从 Cora 热身赛出发，走到赛道一 A 榜第 7 名，再走到 B 榜第 2 名。代码、模型、报告和踩坑心得都放在这里。
+> 这是 sader 团队留下的时序图推荐实验记录：赛道一 A 榜第 7 名，B 榜第 2 名。代码、模型、报告和踩坑心得都放在这里。
 
 [![Jittor](https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square)](https://github.com/Jittor/jittor) [![Python](https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square)](https://www.python.org/) [![Track](https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square)](#ab-榜算法说明与一致性)
 
@@ -16,9 +16,8 @@
 
 | 目录 | 这里放什么 | 适合先读什么 |
 | --- | --- | --- |
-| `warmup/` | Cora GCN 热身赛、CPU 环境和提交打包 | `warmup/cora_gcn/README.md` |
 | `A/` | A 榜完整复现包、训练源码、冻结工件和技术报告 | `A/README.md` |
-| `B/` | B 榜复现包、MF32 代码、流式推理和技术报告 | `B/README.md` |
+| `B/` | B 榜复现包、完整训练链路、流式推理和技术报告 | `B/README.md` |
 
 官方数据不随仓库提供。模型权重、结果包等大文件按 `.gitignore` 规则保留在本地。
 
@@ -34,7 +33,7 @@
 
 最后一个教训来自 ZIP。内容相同，压缩时间戳不同，SHA-256 也会不同。比赛交付的最后一公里，同样需要算法思维：固定顺序、固定小数位、固定 CRC，结果才真正可复现。
 
-这份仓库更像一张比赛地图。你可以从热身赛跑通第一条 GCN，也可以直接进入 A/B 榜，沿着 `verify → build → audit` 的路径复现历史结果。
+这份仓库更像一张比赛地图。你可以进入 A/B 榜，沿着 `verify → reproduce → audit` 的路径复现历史结果。
 
 ## 🫧 图推荐动图角落
 
@@ -86,10 +85,7 @@ qnorm(x) = (x - mean(x)) / (std(x) + 1e-6)
 
 这里的均值和标准差只由当前查询的候选计算，不会在不同查询之间传播信息。融合后再根据数据集接口处理：A 榜的概率成员使用候选内 `softmax`，保证每行概率和为 1；B 榜 Dataset4 则使用固定的 rank grid 表达名次。两种方式都保持候选列对齐、输出宽度固定和数值有限。
 
-两榜都保留固定状态用于历史提交的 SHA-256 验证；B 榜的 `generate-base`
-还会先执行完整上游训练并记录 fresh 冻结状态哈希，再在同一冻结节点接入
-历史状态和 MF32，最终校验 `1.5241` 提交。`train`/`fresh-infer` 仍用于单独
-检查新模型和新结果。
+两榜都保留固定状态用于历史提交的 SHA-256 验证。A 榜以冻结工件 + 固定后处理复现；B 榜对外只有两个命令：`reproduce` 从 `data_B.zip` 完整跑通训练链路，`verify` 用保留的冻结最终态字节级复现 `1.5241`。下面第 3 节展开 B 榜完整链路。
 
 ### 2. A 榜：多成员时序图排序 + 候选内结构校正
 
@@ -131,126 +127,53 @@ p = softmax(z)              # 仅在当前行的 100 个候选内
 
 最终固定输出 `dataset1.csv` 和 `dataset2.csv`；锁定构建器要求它们分别为 61,051 × 100 和 153,420 × 100，并校验概率有限性、ZIP CRC、成员哈希及整个 `result.zip` 的 SHA-256。A 榜报告中的“精确复现”指这条冻结工件 + 固定后处理路径，并不表示从零训练能够得到完全相同的随机模型参数。
 
-### 3. B 榜：同一架构在不同数据集上的适配
+### 3. B 榜：完整训练链路 + 服务复现的冻结层
 
-B 榜沿用完整的主链路：**时序历史建模 → 学习/统计成员 → 候选内融合 → 规范输出**。Dataset3 和 Dataset4 是这套架构在 B 榜数据字段上的具体落地；排序索引、分块读取和流式 batch 则负责把同样的推理逻辑稳稳地跑在更大的数据上。方法边界、候选范围、融合原则和审计流程保持一致。
+B 榜的重心是**完整的多阶段训练链路**：从 `data_B.zip` 出发，逐级训练基座模型、多专家、图排序与元融合，得到候选内的基座分数，最后才做序列化与候选内小残差。对外只有两个命令：`reproduce` 完整跑通这条链路，`verify` 用保留的冻结最终态做字节级复现。冻结资产不是方法主体，只为在历史逐位状态丢失后仍能字节级对齐 `1.5241` 提交而保留。
 
-#### 3.1 Dataset3：目标频次结构残差
+#### 3.1 全链路阶段
 
-Dataset3（由 `B/code/build_submission.py` 构建）对应统一架构里的统计成员。它从官方历史训练边的 `dst` 列统计目标出现次数，不额外引入来源条件化 embedding。对计数 `n(c)` 先做对数压缩：
+`reproduce` 由 `B/code/pipeline/reproduce_full.py` 驱动，上游图为
+`reproduce.py → reproduce_third_1.py → reproduce_ruc4.py → reproduce_c6.py → reproduce_c5.py → reproduce_c3.py → c2_source/reproduce_c2.py`，全部只用官方历史交互训练，不读测试标签、不引入外部数据：
 
-```text
-h(c) = log(1 + n(c))
-```
+- **C2 基座**：来源/会话频次基座，配合 temporal 序列专家、test-pool 回放、三个 512 维隐式 MF 成员、transition-MF，以及六成员 pair-new Transformer，构成 Dataset4 的多专家底座。
+- **C3 多尺度门控**：在基座之上叠加多尺度的来源/会话方向支持残差。
+- **C5 session-ring**：加入会话环支持与受控残差。
+- **C6 tie-group**：在重复候选组内做并列建模。
+- **RUC4**：三种子候选 Set Transformer，配合 session graph、难负例排序与 RP3/RUC2/RUC3/RUC4 候选融合。
+- **third_1 元融合**：汇合 replay 缓存、hierarchy/neighbor 特征与 75 维 Jittor 元排序器，产出候选内基座分数。
 
-候选 ID 通过排序后的词表和 `searchsorted` 映射；历史中没有出现的候选取 0。对每行 100 个候选做 `qnorm`，再用 `tanh` 把幅度限制在有限区间，最后以固定的 `0.005` 小权重加到冻结基座分数上。它表达的是一个低幅度的结构先验，只在分数接近时帮助区分候选，不会让全局热门目标压过基座模型。
+这些阶段的产物（各基座 ZIP、专家 checkpoint、replay 缓存、特征、元模型）都在链路内由官方数据逐级生成，最终写出一个基座分数 `result.zip`——它是中间分数容器，不是最终提交。
 
-#### 3.2 Dataset4：32 维隐式矩阵分解
+#### 3.2 序列化与最后一层
 
-Dataset4 对应统一架构里的学习成员（定义见 `B/code/model.py`，训练见 `B/code/train_model.py`），使用 32 维隐式矩阵分解。每个来源有向量 `u_s`，每个目标候选有向量 `v_c` 和总体活跃度偏置 `b_c`，分数为：
+基座分数经 `pack_frozen_base.py` 序列化为冻结中间态：
+
+| 成员 | 编码 |
+| --- | --- |
+| `dataset3_q35_lzma` | 定点 `1e10`、ZigZag、35 bit-plane、LZMA |
+| `dataset4_q7` | 候选内裁剪 q7、按行小端打包 |
+
+最后一层在冻结基座上做候选内有界残差：Dataset3 用目标频次结构残差 `0.005 * tanh(qnorm(log(1+n(c))) / 2)`（实现见 `B/code/build_submission.py`）；Dataset4 用 32 维隐式 MF 的候选内残差：
 
 ```text
 f(s, c) = u_s · v_c + b_c
-```
-
-训练时从官方历史交互中取正边，为每条正边抽取 8 个不重复负目标，把正目标放在候选组第 0 列，使用组内交叉熵训练 Jittor `AdamW`。报告记录的配置为 embedding 维度 32、`negatives=8`、`epochs=1`、`batch=4096`、学习率 `1e-3`、权重衰减 `1e-6`，随机种子由训练入口固定。
-
-推理时不构造全体来源 × 全体目标的巨大矩阵，而是按批次 gather 当前来源和 100 个候选，计算 `f(s,c)`，再执行候选内有界残差：
-
-```text
 r4 = tanh(qnorm(f(s, c)) / 2)
 score4 = frozen_base + 0.02 * r4
 ```
 
-融合后采用稳定降序排序，并把名次映射到固定的 `rank grid`（从 1 到 0），从而让输出主要表达候选顺序，避免不同机器的浮点分数尺度改变提交格式。最终固定写出 `dataset3.csv` 和 `dataset4.csv`（分别为 157,670 × 100 和 2,322,538 × 100），并执行与 A 榜相同的 CRC、成员摘要和结果 SHA-256 检查。
+融合后稳定降序排序并映射到固定 `rank grid`（1→0），固定写出 `dataset3.csv` 和 `dataset4.csv`（157,670 × 100 和 2,322,538 × 100），并执行与 A 榜相同的 CRC、成员摘要和 `result.zip` SHA-256 校验。与 A 榜一致，这里的“精确复现”指冻结工件 + 固定后处理路径：`verify` 直接从冻结最终态复现，`reproduce` 完整重训后对齐同一冻结最终态；从零重训受机器数值差异影响不保证逐位相同，这一点两榜相同。
 
 ### 4. 两榜如何保持同一架构
 
 | 层次 | A 榜在对应数据集上的实现 | B 榜在对应数据集上的实现 | 共同架构 |
 | --- | --- | --- | --- |
 | 数据边界 | 历史交互、来源、时间和 100 候选 | 历史交互、来源和 100 候选，按数据集需要使用时间 | 不读测试标签、不引入外部数据 |
-| 学习/统计成员 | 按 Dataset1/2 的字段实例化图排序、VAE/BPR 和集合成员 | 按 Dataset3/4 的字段实例化目标频次和 MF32 成员 | 都从官方历史中学习或统计 |
+| 学习/统计成员 | 按 Dataset1/2 的字段实例化图排序、VAE/BPR 和集合成员 | C2/C3/C5/C6/RUC4/third_1 多专家与元融合链路 | 都从官方历史中学习或统计 |
 | 融合方式 | 候选内 `qnorm`、固定残差、softmax | 候选内 `qnorm`、有界残差、固定 rank grid | 只在当前 100 个候选内校准 |
-| 工程落地 | 冻结基座和 BPR32 的精确重建 | 排序索引、分块读取和流式批量 | 固定接口、稳定序列化和哈希审计 |
+| 工程落地 | 冻结基座和 BPR32 的精确重建 | 全链路重跑 + 冻结最终态字节级复现 | 固定接口、稳定序列化和哈希审计 |
 
 所以，“算法一致”指两榜共享任务边界、候选内排序思想、Jittor 实现和可审计输出契约。由于官方数据集的字段、实体规模和查询接口不同，具体成员与批处理方式做相应适配；这属于同一架构下的数据集落地，不是架构改写。
-
-## 🧪 热身赛环境
-
-The following CPU-first environment is for `warmup/cora_gcn`. The A/B packages have their own pinned requirements and CUDA launchers under `A/` and `B/`.
-
-- Python: 3.10
-- Framework: Jittor 1.3.11.0
-- Graph library: JittorGeometric 2.0.0
-
-Create the environment:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r warmup/requirements.txt
-python -m pip install git+https://github.com/AlgRUC/JittorGeometric.git
-python warmup/scripts/patch_jittor_geometric_cpu.py
-source warmup/env.sh
-python warmup/verify_env.py
-```
-
-See [warmup/ENVIRONMENT.md](warmup/ENVIRONMENT.md) for the CPU compatibility notes.
-
-## 🌱 热身赛数据准备
-
-Warm-up 1: download the release package from the competition platform and place
-the dataset at:
-
-```text
-warmup/cora_gcn/data/cora.pkl
-```
-
-The dataset file is not tracked in Git. The expected fields are described in
-[warmup/cora_gcn/README.md](warmup/cora_gcn/README.md).
-
-## 🏃 热身赛训练
-
-Run the warm-up training script:
-
-```bash
-source warmup/env.sh
-python warmup/cora_gcn/gcn.py \
-  --data-path warmup/cora_gcn/data/cora.pkl \
-  --output warmup/cora_gcn/result.json \
-  --seed 42 \
-  --epochs 200
-```
-
-The script trains a two-layer GCN and reports training accuracy and best
-validation accuracy.
-
-## 📦 热身赛评测与推理
-
-The competition warm-up release evaluates the generated `result.json` on the
-hidden test labels. To regenerate the prediction file only after training, run
-the same command above and package the result:
-
-```bash
-cd warmup/cora_gcn
-python gcn.py --seed 42 --epochs 200 --output result.json
-zip ../submissions/warmup1-result.zip result.json
-```
-
-`result.json` and submission archives are generated artifacts and are ignored by
-Git.
-
-## 🏁 热身赛结果
-
-- Task: warm-up 1, Cora node classification
-- Metric: accuracy on node labels
-- Local best validation accuracy: 0.8120
-- Platform submission status: passed
-
-The local validation score may differ slightly across machines because Jittor,
-CPU/GPU kernels, and random initialization can vary. Use `--seed` to keep runs
-as reproducible as possible.
 
 ## 🗂️ 仓库结构
 
@@ -258,17 +181,6 @@ as reproducible as possible.
 .
 ├── A/                            # A 榜比赛包
 ├── B/                            # B 榜比赛包
-├── warmup/
-│   ├── cora_gcn/
-│   │   ├── data/README.md        # data placement instructions
-│   │   ├── gcn.py                # training and inference entry point
-│   │   └── README.md             # task-specific notes
-│   ├── scripts/                  # CPU compatibility helper
-│   ├── submissions/              # generated submission archives, ignored
-│   ├── ENVIRONMENT.md
-│   ├── env.sh
-│   ├── requirements.txt
-│   └── verify_env.py
 ├── LICENSE
 ├── NOTICE.md
 └── README.md

@@ -72,11 +72,31 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--assets", type=Path, default=ASSET_DIR)
+    parser.add_argument("--model-output", type=Path, help="also copy the locked MF32 checkpoint here")
     args = parser.parse_args()
 
     assets = args.assets.resolve()
     model = validate_model(assets)
     restored = restore_base(assets, args.output.resolve())
+    model_restored = False
+    if args.model_output is not None:
+        destination = args.model_output.resolve()
+        if not (destination.is_file() and destination.stat().st_size == MODEL_BYTES and sha256(destination) == MODEL_SHA256):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                with model.open("rb") as source, temporary.open("xb") as target:
+                    for block in iter(lambda: source.read(8 << 20), b""):
+                        target.write(block)
+                    target.flush()
+                    os.fsync(target.fileno())
+                if sha256(temporary) != MODEL_SHA256:
+                    raise ValueError("restored MF32 checkpoint SHA-256 differs")
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+            model_restored = True
+        model = destination
     print(
         json.dumps(
             {
@@ -86,6 +106,7 @@ def main() -> int:
                 "model": str(model),
                 "model_sha256": MODEL_SHA256,
                 "restored": restored,
+                "model_restored": model_restored,
             },
             sort_keys=True,
         ),

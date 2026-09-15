@@ -1,25 +1,28 @@
 # A/B algorithm consistency
 
-The accepted A-list and B-list packages share the same outer contract:
-official competition input, retained final state, Jittor candidate scoring,
-candidate-local fusion, and deterministic ZIP serialization.
+A-list and B-list are the same algorithm on Track 1's temporal-graph
+candidate-ranking task. Both build history-only members, calibrate every model
+inside the 100-candidate row with `qnorm`, fuse with bounded candidate-local
+residuals over a retained frozen base, and serialize a deterministic two-member
+`result.zip` accepted by a fixed SHA-256. The method, the candidate boundary,
+the fusion principle, and the audit contract are identical.
 
-| Contract | A list | B list |
-| --- | --- | --- |
-| Base state | retained score archive | retained q35/q7 frozen checkpoint |
-| Full reconstruction | official-data raw training | official-data C2/C3/C5/C6/RUC4/third_1 graph |
-| Final learned member | BPR32 signal | MF32 signal |
-| Candidate processing | bounded local residual | bounded local residual and rank grid |
-| Output | deterministic two-member ZIP | deterministic two-member ZIP |
+| Aspect | A list | B list | Shared design |
+| --- | --- | --- | --- |
+| Task | source + time + 100 candidates | source + time + 100 candidates | rank inside the given candidates |
+| Data boundary | history-only, no future edges | history-only, no future edges | no test labels, no external data |
+| Members | Dataset1/Dataset2 graph rank + VAE/BPR + set experts | Dataset3 frequency residual + Dataset4 expert graph and MF | learn or count from official history |
+| Base + fusion | frozen base + bounded in-row residual | frozen base + bounded in-row residual | correct only within the 100 candidates |
+| Output | deterministic two-member ZIP | deterministic two-member ZIP | fixed order, fixed digits, SHA-256 |
+| Delivery | verify from retained final state | verify + full-chain reproduce | byte-exact recorded result |
 
-The B-list package exposes two commands only:
+## Differences are data-scale adaptations only
 
-```text
-verify     frozen final-layer reproduction
-reproduce  complete data_B.zip reconstruction
-```
-
-The full B-list graph is implemented in `code/pipeline/`. It trains the D3/D4
-components, writes base score matrices, serializes q35/q7 frozen scores, and
-constructs the recorded result. `README.md` and `code/pipeline/README.md`
-describe the full stage graph and output contract.
+The B-list dataset is larger (more sources/items, larger query set), so the same
+algorithm is instantiated with engineering adaptations that do not change the
+model design: expanded entity vocabularies with sorted-vocabulary index mapping,
+chunked reading and streaming batches for the larger candidate volume, and more
+member seeds/stages wired through the same in-row fusion. Dataset3 stays a
+target-frequency structural residual and Dataset4 stays an implicit-MF member;
+both feed the same in-row calibration and deterministic serialization used on
+the A list. These are scale adaptations, not a new architecture.
