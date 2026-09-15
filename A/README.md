@@ -90,20 +90,26 @@ of model training, inference, or locked result construction.
 Pass the unmodified official archive and a new output directory:
 
 ```bash
-python code/main.py verify --data /data1/songwentao/DL/data/data_A.zip --output /data1/contest1-verify
+python code/main.py verify \
+  --data /path/to/data_A.zip \
+  --output /path/to/a-verify
 ```
 
 The direct shell launcher remains equivalent and is retained for transparent
 review:
 
 ```bash
-bash run_verify.sh /data1/songwentao/DL/data/data_A.zip /data1/contest1-verify
+bash run_verify.sh \
+  /path/to/data_A.zip \
+  /path/to/a-verify
 ```
 
 For the direct build without the prior static audit:
 
 ```bash
-bash run_inference.sh /data1/songwentao/DL/data/data_A.zip /data1/contest1-output
+bash run_inference.sh \
+  /path/to/data_A.zip \
+  /path/to/a-output
 ```
 
 The output directory must not already exist. Successful execution writes
@@ -131,10 +137,22 @@ The complete Jittor training protocol is available for review and a fresh
 official-data run. Use new, disjoint output directories:
 
 ```bash
-python code/main.py train --data /path/to/data_A.zip --models /path/to/model_output --dataset all --cuda
-python code/main.py fresh-infer --data /path/to/data_A.zip --models /path/to/model_output --output /path/to/fresh_output
+python code/main.py train \
+  --data /path/to/data_A.zip \
+  --models /path/to/model_output \
+  --dataset all \
+  --cuda
+
+python code/main.py fresh-infer \
+  --data /path/to/data_A.zip \
+  --models /path/to/model_output \
+  --output /path/to/fresh_output
+
 # Or run the two stages, plus source/output receipts, as one command:
-python code/main.py raw --data /path/to/data_A.zip --models /path/to/model_output --output /path/to/fresh_output
+python code/main.py raw \
+  --data /path/to/data_A.zip \
+  --models /path/to/model_output \
+  --output /path/to/fresh_output
 ```
 
 Dataset1 trains seeds `20260705` and `20260715` with `groups=80000`,
