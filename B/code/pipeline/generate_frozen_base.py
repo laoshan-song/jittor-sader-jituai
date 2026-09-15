@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Generate frozen_base.ckpt from the official data.
 
-This is the upstream half of the B-list flow that the published package left
-implicit. It runs the official-data training/inference pipeline and packs its
-score matrices into ``models/frozen_base.ckpt`` so the existing
-``code/build_submission.py`` reranker can reproduce the recorded top submission
-(online score 1.5240999401892983).
+This is the direct upstream reproduction of the B-list 1.5241
+training-to-submission flow. It runs the official-data training/inference
+pipeline and packs its base score matrices into ``frozen_base.ckpt`` for the
+shared ``code/build_submission.py`` MF32 reranker.
 
     official data_B.zip
-      -> generation/reproduce.py            (end-to-end D3/D4 training -> result.zip)
-      -> generation/pack_frozen_base.py     (score matrices -> frozen_base.ckpt)
-      -> code/build_submission.py           (frozen base + MF32 residual -> result.zip)
+      -> pipeline/reproduce.py           (D3/D4 training -> base-score result.zip)
+      -> pipeline/pack_frozen_base.py    (score matrices -> frozen_base.ckpt)
+      -> code/build_submission.py        (frozen base + MF32 residual -> final result.zip)
 
-The purpose of this directory is to supply the frozen-base generation chain from
-the official data alone. The pipeline records the hashes it produced in
-``REPRODUCTION_RECEIPT.json`` next to the base.
+The generated checkpoint directly enters the same downstream interface as the
+retained historical state. Its bytes can be perturbed because not every
+historical parameter script and checkpoint was retained and Jittor/CUDA
+reductions depend on the runtime. The pipeline records the hashes it actually
+produced in ``REPRODUCTION_RECEIPT.json`` next to the base.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from pathlib import Path
 
 
 DATA_SHA256 = "ded8b0d281042323f0c5871868824038bc7fb675cc3e8211753bb63d8b7b89d2"
-# Recorded top submission that this reproduction targets.
 TARGET_ONLINE_SCORE = 1.5240999401892983
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE / "reproduce.py"
@@ -94,7 +94,7 @@ def main() -> int:
         print(json.dumps(receipt, indent=2, sort_keys=True))
         return 0
 
-    # reproduce.py writes the trained submission to <its work-dir>/pipeline/result.zip
+    # reproduce.py writes base score matrices to <its work-dir>/pipeline/result.zip.
     result_zip = pipeline_work / "pipeline" / "result.zip"
     if not result_zip.is_file():
         raise FileNotFoundError(f"pipeline did not produce {result_zip}")
@@ -116,7 +116,9 @@ def main() -> int:
         "frozen_base_sha256": sha256(output),
         "pipeline_result_sha256": sha256(result_zip),
         "pipeline_receipt": str(pipeline_receipt) if pipeline_receipt.is_file() else None,
+        "output_role": "fresh_frozen_intermediate_state",
         "target_online_score": TARGET_ONLINE_SCORE,
+        "historical_byte_parity_asserted": False,
         "external_data_used": False,
         "uses_test_labels": False,
         "elapsed_seconds": time.time() - started,

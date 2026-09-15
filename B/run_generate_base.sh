@@ -2,7 +2,7 @@
 # Regenerate the frozen base from official data, then pack it into frozen_base.ckpt.
 # Usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GEN="$ROOT/code/pipeline"
 PYTHON="${PYTHON:-python3}"
 DATA="${1:?usage: run_generate_base.sh data_B.zip work-dir [gpu] [output-ckpt]}"

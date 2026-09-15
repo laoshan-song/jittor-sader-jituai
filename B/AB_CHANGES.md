@@ -26,16 +26,18 @@ serialization stages.
 The retained frozen base is no longer opaque: `code/pipeline/` reconstructs it
 from the official data. `code/pipeline/reproduce_third_1.py` trains every
 Dataset3/Dataset4 component from scratch and emits the base score matrices, and
-`code/pipeline/pack_frozen_base.py` — the exact inverse of the
-`code/build_submission.py` decoders — packs them into `frozen_base.ckpt`
-(Dataset3 zig-zag q35+LZMA, Dataset4 7-bit packing). This documents and
-executes the complete from-scratch training method independently of the tracked
-locked assets. Exact recorded-result reproduction remains a separate path that
-uses the retained split checkpoint under `code/assets/locked/`.
+`code/pipeline/pack_frozen_base.py` -- the exact inverse of the
+`code/build_submission.py` decoders -- packs them into `frozen_base.ckpt`
+(Dataset3 ZigZag q35+LZMA, Dataset4 7-bit packing). This documents and executes
+the complete training method through the frozen-state boundary. The retained
+split checkpoint under `code/assets/locked/` is the preserved historical output
+of that same stage; it stabilizes byte-level verification when missing per-run
+parameter scripts and machine-dependent numerical reductions perturb a new
+training run.
 
 For the recorded B-list result, the reviewer supplies the official
-`data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint
-are package members validated by SHA-256 and consumed by the result builder.
+`data_B.zip` and runs `run_verify.sh`. The fixed base and Jittor checkpoint are
+package members validated by SHA-256 and consumed by the result builder.
 
 The supplementary commands preserve the same source layout and interfaces:
 

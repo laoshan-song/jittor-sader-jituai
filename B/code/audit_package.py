@@ -59,6 +59,12 @@ REQUIRED = {
     "run_verify.sh",
     "run_train.sh",
     "run_fresh_inference.sh",
+    "run_generate_base.sh",
+    "code/pipeline/README.md",
+    "code/pipeline/reproduce.py",
+    "code/pipeline/reproduce_third_1.py",
+    "code/pipeline/generate_frozen_base.py",
+    "code/pipeline/pack_frozen_base.py",
     "code/raw_training/README.md",
     "code/raw_training/main.py",
     "code/raw_training/build_base.py",
@@ -282,10 +288,18 @@ def main() -> int:
     )
     if "models/frozen_base.ckpt" in fresh_sources:
         raise ValueError("fresh training or inference references the locked base")
-    for launcher in ("run_inference.sh", "run_train.sh", "run_fresh_inference.sh"):
+    for launcher in (
+        "run_inference.sh",
+        "run_train.sh",
+        "run_fresh_inference.sh",
+        "run_generate_base.sh",
+    ):
         source = (root / launcher).read_text(encoding="utf-8")
         if "prepare_cuda_runtime.sh" not in source or "check_environment.py" not in source:
             raise ValueError(f"CUDA preparation or environment check is absent: {launcher}")
+    generate_launcher = (root / "run_generate_base.sh").read_text(encoding="utf-8")
+    if 'dirname "${BASH_SOURCE[0]}")" && pwd' not in generate_launcher:
+        raise ValueError("frozen-base launcher does not resolve the B package root")
     locked_launcher = (root / "run_inference.sh").read_text(encoding="utf-8")
     if "restore_locked_assets.py" not in locked_launcher or MODEL_PATH not in locked_launcher:
         raise ValueError("locked inference does not restore the tracked assets")
