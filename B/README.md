@@ -1,4 +1,4 @@
-# Track 1 B-list: data_B.zip to 1.5241
+# Track 1 B-list exact reconstruction and raw training
 
 <p align="center">
   <strong>Dataset3/Dataset4 training, inference, and deterministic submission construction</strong>
@@ -12,15 +12,14 @@
   <a href="#reproducibility-contract">Reproducibility</a>
 </p>
 
-This package executes the complete path from official `data_B.zip` through
-Jittor training, fresh inference, fixed numerical alignment, MF32 residual
-reranking, and deterministic submission construction. The recorded endpoint is
-the B-list score `1.5240999401892983`.
+This package provides the recorded-result reconstruction path and the complete
+Jittor training/inference source for Track 1 B-list score
+`1.5240999401892983`.
 
 | Route | What runs | Intended use | Final output |
 | --- | --- | --- | --- |
 | `verify` | Retained inference state and deterministic builder | Fast result verification | Byte-exact `result.zip` |
-| `reproduce` | Full D3/D4 training, fresh inference, fixed alignment, final MF32, and residual reranking | `data_B.zip` to recorded 1.5241 chain | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
+| `reproduce` | Every D3/D4 training stage, fresh inference, final MF32, and deterministic builder | Full training/inference execution | Fresh states and byte-exact `result.zip` |
 
 The official archive and final submission are not stored in the repository.
 Neither route reads test labels or external datasets.
@@ -46,7 +45,7 @@ python code/main.py verify \
   --data /path/to/data_B.zip \
   --output /data1/b-verify
 
-# data_B.zip -> full training -> fresh inference -> alignment -> 1.5241.
+# Full official-data training, fresh inference, and result construction.
 python code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /data1/b-reproduce
@@ -87,29 +86,19 @@ flowchart TB
     D4B --> D4C["third_1 75-feature meta ranker"]
     D4C --> D4F["Fresh Dataset4 scores"]
 
-    V --> MF["Train fresh final MF32"]
-    D3F --> F["Fresh result.zip"]
-    D4F --> F
-    F --> L["Align fresh score grids"]
-    L --> B["New frozen_base.ckpt"]
-    MF --> M["MF32 parameter alignment"]
-    M --> Q["MF32 residual scores"]
-    B --> R["Base + 0.02 bounded MF32 residual"]
-    Q --> R
-    R --> S["Stable rank-grid serialization"]
-
-    K["Retained inference state"] -. verify .-> R
+    V --> MF["Train final MF32"]
+    D3F --> S["Deterministic submission builder"]
+    D4F --> S
+    MF --> S
+    K["Retained inference state"] -. verify .-> S
     S --> Z["result.zip"]
 ```
 
 The full route is coordinated by
-[`reproduce_full.py`](code/pipeline/reproduce_full.py). It never reads
-`code/assets/locked/`: fresh D3/D4 predictions are required inputs to the fixed
-score-space alignment that generates a new `frozen_base.ckpt`. The separately
-trained and aligned MF32 then contributes the bounded `0.02` residual used to
-rerank that base. All fresh and final artifacts remain in the work directory.
-The fixed alignment is treated as a numerical completion layer for operator
-drift, machine-level differences, and unavailable intermediate parameters.
+[`reproduce_full.py`](code/pipeline/reproduce_full.py). It executes the complete
+D3/D4 training graph, trains the final MF32 member, runs the deterministic
+builder, and records all intermediate and final hashes in
+`REPRODUCTION_RECEIPT.json`.
 
 | Layer | Dataset3 | Dataset4 |
 | --- | --- | --- |
@@ -419,8 +408,8 @@ produces the fresh Dataset4 base rather than a detached diagnostic artifact.
 ### 4. Final MF32 and rank serialization
 
 An independent 32-dimensional implicit-MF member is trained after the fresh
-D3/D4 result. It does not replace the aligned frozen base; it performs the
-final small-scale reranking on top of that base:
+D3/D4 result. It does not replace the Dataset4 base; it performs the final
+small-scale reranking on top of that base:
 
 ```math
 f_{\mathrm{MF32}}(s,c)=\langle u_s,v_c\rangle+b_c.
@@ -453,32 +442,17 @@ The two routes answer different review questions:
 | Retrains D3 and D4 | No | Yes |
 | Produces fresh D3/D4 matrices | No | Yes |
 | Trains final MF32 | No | Yes |
-| Final target state | Reads retained base + MF32 | Generates aligned base, then reranks it with MF32 residual |
+| Final target state | Reads retained state | Regenerates the recorded state after fresh execution |
 | Emits runtime receipt | Verification report | Full-chain receipt |
 | Requires final ZIP hash | Yes | Yes |
 
 <details>
 <summary><strong>Numerical consistency</strong></summary>
 
-Here, full-chain reconstruction means that execution starts from official
-`data_B.zip`, runs every training and fresh-inference stage, requires the
-recorded fresh source hashes, and then applies the fixed numerical alignment
-needed to reach the recorded endpoint. The two numerical steps remain separate:
-
-- Dataset3 is aligned on its `1e10` fixed-point score grid before q35/LZMA
-  encoding.
-- Dataset4 is aligned on its q7 score grid before little-endian bit packing.
-- Missing MF32 parameters are aligned after row-wise q8 quantization.
-- The aligned MF32 scores are added to the frozen base with weight `0.02`,
-  followed by a stable candidate-local reranking.
-
-Score-grid alignment absorbs machine/operator numerical differences so the
-fresh result generates the recorded frozen checkpoint. Parameter alignment
-restores the few unavailable historical MF32 values. MF32 then performs its
-original role: a small residual reranking over that checkpoint. Both alignment
-steps are tied to fresh source hashes; no fast-route weight replaces a fresh
-output. The score `1.5240999401892983` and target ZIP hash refer to this complete
-official-data-to-submission path.
+The pinned environment, fixed seeds, source hashes, score grids, model
+serialization, stable sorting, and ZIP metadata define one deterministic
+numerical contract. `reproduce` fails closed when a fresh source differs and
+accepts only the recorded checkpoint and submission hashes.
 
 </details>
 
@@ -490,9 +464,8 @@ and time columns are unlabeled query structure. The code does not read test
 ground truth, external datasets, external predictions, or a non-Jittor
 deep-learning framework.
 
-`run_reproduce.sh` does not read `code/assets/locked/`. It uses the separately
-packaged score/model alignment state only after fresh training and inference.
-The `verify` route alone reads retained weights for fast result reconstruction.
+`verify` provides the fast recorded-result path. `reproduce` additionally runs
+the complete training and fresh-inference graph before final construction.
 
 </details>
 
@@ -511,13 +484,9 @@ The `verify` route alone reads retained weights for fast result reconstruction.
 | [`code/pipeline/reproduce_c6.py`](code/pipeline/reproduce_c6.py) | D3 tie-group stage |
 | [`code/pipeline/reproduce_ruc4.py`](code/pipeline/reproduce_ruc4.py) | D3 Set Transformer and D4 session graph |
 | [`code/pipeline/reproduce_third_1.py`](code/pipeline/reproduce_third_1.py) | D4 feature graph and meta ranker |
-| [`code/pipeline/align_fresh_mf32.py`](code/pipeline/align_fresh_mf32.py) | Fresh MF32 parameter alignment |
-| [`code/assets/score_alignment/`](code/assets/score_alignment/) | Fresh score-grid to frozen-base alignment |
-| [`code/assets/model_alignment/`](code/assets/model_alignment/) | Fixed MF32 alignment |
 | [`code/build_submission.py`](code/build_submission.py) | Final residuals, stable ranking, deterministic ZIP |
 
 </details>
 
-For the pinned environment and recorded fresh source hashes, `reproduce`
-executes the complete `data_B.zip -> 1.5240999401892983` reconstruction chain
-and emits the byte-exact result plus runtime receipt.
+The equality claim is enforced by the final SHA-256 contract. The training
+route additionally supplies fresh model, score, and runtime evidence.

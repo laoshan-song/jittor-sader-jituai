@@ -432,7 +432,7 @@ python B/code/main.py verify \
   --data /path/to/data_B.zip \
   --output /path/to/b-verify
 
-# data_B.zip -> 全量训练/fresh 推理 -> 固定对齐与重排 -> 1.5241
+# 官方数据 -> 全量训练 -> fresh 推理 -> 确定性构建 -> 提交
 python B/code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /path/to/b-reproduce
@@ -446,14 +446,12 @@ python B/code/main.py reproduce \
 | A`verify`    | 不重训                   | 快速复验 A 榜记录结果              |
 | A`raw`       | 重训 A 榜 raw 成员       | 审阅训练与 fresh 推理              |
 | B`verify`    | 不重训                   | 快速复验 B 榜记录结果              |
-| B`reproduce` | 重训 D3/D4 与 final MF32 | 打通 `data_B.zip` 到记录分数 1.5241 |
+| B`reproduce` | 重训 D3/D4 与 final MF32 | 完整训练、fresh 推理与结果构建 |
 
-`B reproduce` 从 `data_B.zip` 开始，实际执行 D3、D4 与 final MF32 的全部
-训练和 fresh 推理；固定对齐层负责吸收算子扰动、机器差异并补齐缺失的中间
-参数，fresh 分数据此生成新 `frozen_base.ckpt`，MF32 再以 `0.02` 有界残差
-执行最终小规模重排。该入口不读取快速链的 `assets/locked/`，且 fresh 产物
-哈希不符时直接失败，最终得到记录分数 `1.5240999401892983` 对应的
-byte-exact 提交。详细边界见
+`B reproduce` 与 A 榜 raw 路径采用同一分层口径：从官方 `data_B.zip`
+执行 D3、D4 与 final MF32 的训练和 fresh 推理，再由确定性构建器生成提交。
+固定环境、种子、序列化与最终 SHA-256 共同约束记录结果；测试标签和外部数据
+均不参与。详细协议见
 [`B/README.md#reproducibility-contract`](B/README.md#reproducibility-contract)。
 
 最终 B 榜 `result.zip` SHA-256：
