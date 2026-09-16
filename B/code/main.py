@@ -18,7 +18,7 @@ def main() -> int:
         choices=("verify", "reproduce"),
         help=(
             "verify reconstructs the retained byte-exact result; reproduce "
-            "rebuilds and aligns the complete fresh data_B.zip chain"
+            "runs the complete data_B.zip-to-1.5241 reconstruction chain"
         ),
     )
     parser.add_argument("--data", type=Path, required=True)

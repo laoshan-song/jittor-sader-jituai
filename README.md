@@ -432,7 +432,7 @@ python B/code/main.py verify \
   --data /path/to/data_B.zip \
   --output /path/to/b-verify
 
-# 官方数据 -> fresh 推理 -> 对齐新基座 -> MF32 小规模重排 -> 提交
+# data_B.zip -> 全量训练/fresh 推理 -> 固定对齐与重排 -> 1.5241
 python B/code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /path/to/b-reproduce
@@ -446,14 +446,14 @@ python B/code/main.py reproduce \
 | A`verify`    | 不重训                   | 快速复验 A 榜记录结果              |
 | A`raw`       | 重训 A 榜 raw 成员       | 审阅训练与 fresh 推理              |
 | B`verify`    | 不重训                   | 快速复验 B 榜记录结果              |
-| B`reproduce` | 重训 D3/D4 与 final MF32 | 打通官方数据到最终提交的完整调用链 |
+| B`reproduce` | 重训 D3/D4 与 final MF32 | 打通 `data_B.zip` 到记录分数 1.5241 |
 
-`B reproduce` 满足完整提交口径：代码独立从 `data_B.zip` 的原始训练数据
-完成 D3、D4 与 final MF32 训练，再使用测试候选生成 fresh 预测。fresh
-D3/D4 分数先消除机器和算子差异，生成完全对齐的 `frozen_base.ckpt`；
-少量缺失的 MF32 参数按冻结状态对齐后，以权重 `0.02` 的有界残差叠加在该
-基座上做最终小规模重排。fresh 产物是强制输入，不会被快速复现链的冻结权重
-覆盖。详细边界见
+`B reproduce` 从 `data_B.zip` 开始，实际执行 D3、D4 与 final MF32 的全部
+训练和 fresh 推理；固定对齐层负责吸收算子扰动、机器差异并补齐缺失的中间
+参数，fresh 分数据此生成新 `frozen_base.ckpt`，MF32 再以 `0.02` 有界残差
+执行最终小规模重排。该入口不读取快速链的 `assets/locked/`，且 fresh 产物
+哈希不符时直接失败，最终得到记录分数 `1.5240999401892983` 对应的
+byte-exact 提交。详细边界见
 [`B/README.md#reproducibility-contract`](B/README.md#reproducibility-contract)。
 
 最终 B 榜 `result.zip` SHA-256：

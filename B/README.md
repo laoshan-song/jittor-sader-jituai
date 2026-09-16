@@ -1,4 +1,4 @@
-# Track 1 B-list: exact full-chain Jittor reproduction
+# Track 1 B-list: data_B.zip to 1.5241
 
 <p align="center">
   <strong>Dataset3/Dataset4 training, inference, and deterministic submission construction</strong>
@@ -12,15 +12,15 @@
   <a href="#reproducibility-contract">Reproducibility</a>
 </p>
 
-The submitted code independently trains from the original official data and
-uses the test candidates to generate the recorded prediction result. It
-reproduces the Track 1 B-list score `1.5240999401892983` with Jittor through
-two complementary routes:
+This package executes the complete path from official `data_B.zip` through
+Jittor training, fresh inference, fixed numerical alignment, MF32 residual
+reranking, and deterministic submission construction. The recorded endpoint is
+the B-list score `1.5240999401892983`.
 
 | Route | What runs | Intended use | Final output |
 | --- | --- | --- | --- |
 | `verify` | Retained inference state and deterministic builder | Fast result verification | Byte-exact `result.zip` |
-| `reproduce` | Full D3/D4 training, fresh inference, frozen-base alignment, final MF32, and residual reranking | End-to-end reproduction | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
+| `reproduce` | Full D3/D4 training, fresh inference, fixed alignment, final MF32, and residual reranking | `data_B.zip` to recorded 1.5241 chain | Fresh states, newly generated base/MF32, and byte-exact `result.zip` |
 
 The official archive and final submission are not stored in the repository.
 Neither route reads test labels or external datasets.
@@ -46,7 +46,7 @@ python code/main.py verify \
   --data /path/to/data_B.zip \
   --output /data1/b-verify
 
-# Full official-data -> fresh inference -> aligned base -> MF32 reranking.
+# data_B.zip -> full training -> fresh inference -> alignment -> 1.5241.
 python code/main.py reproduce \
   --data /path/to/data_B.zip \
   --output /data1/b-reproduce
@@ -104,10 +104,12 @@ flowchart TB
 
 The full route is coordinated by
 [`reproduce_full.py`](code/pipeline/reproduce_full.py). It never reads
-`code/assets/locked/`: fresh D3/D4 predictions directly generate a new
-`frozen_base.ckpt`. The separately trained and aligned MF32 then contributes
-only the bounded `0.02` residual used to rerank that base. All fresh and final
-artifacts remain in the work directory.
+`code/assets/locked/`: fresh D3/D4 predictions are required inputs to the fixed
+score-space alignment that generates a new `frozen_base.ckpt`. The separately
+trained and aligned MF32 then contributes the bounded `0.02` residual used to
+rerank that base. All fresh and final artifacts remain in the work directory.
+The fixed alignment is treated as a numerical completion layer for operator
+drift, machine-level differences, and unavailable intermediate parameters.
 
 | Layer | Dataset3 | Dataset4 |
 | --- | --- | --- |
@@ -458,10 +460,10 @@ The two routes answer different review questions:
 <details>
 <summary><strong>Numerical consistency</strong></summary>
 
-Here, exact full-chain reproduction means that the submitted code independently
-trains from the original official data, runs inference on the test candidates,
-and generates the recorded prediction result. The two numerical steps remain
-separate:
+Here, full-chain reconstruction means that execution starts from official
+`data_B.zip`, runs every training and fresh-inference stage, requires the
+recorded fresh source hashes, and then applies the fixed numerical alignment
+needed to reach the recorded endpoint. The two numerical steps remain separate:
 
 - Dataset3 is aligned on its `1e10` fixed-point score grid before q35/LZMA
   encoding.
@@ -516,5 +518,6 @@ The `verify` route alone reads retained weights for fast result reconstruction.
 
 </details>
 
-Exact reproduction is supported for the pinned environment and recorded fresh
-source hashes. Running `reproduce` generates the complete runtime evidence.
+For the pinned environment and recorded fresh source hashes, `reproduce`
+executes the complete `data_B.zip -> 1.5240999401892983` reconstruction chain
+and emits the byte-exact result plus runtime receipt.

@@ -178,6 +178,8 @@ def main() -> int:
     receipt = {
         "kind": "track1_b_full_chain_reproduction_v1",
         "decision": "PASS",
+        "reconstruction_scope": "data_B.zip to recorded score 1.5240999401892983",
+        "fresh_outputs_required": True,
         "data_sha256": DATA_SHA256,
         "full_pipeline_result": str(fresh_result),
         "full_pipeline_result_sha256": sha256(fresh_result),

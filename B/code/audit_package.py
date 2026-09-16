@@ -337,6 +337,9 @@ def main() -> int:
         or metadata.get("official_training_data_only") is not True
         or metadata.get("packaged_reproducibility_state") is not True
         or metadata.get("target_specific_alignment") is not True
+        or metadata.get("fresh_outputs_required") is not True
+        or metadata.get("reconstruction_scope")
+        != "data_B.zip to recorded score 1.5240999401892983"
         or metadata.get("test_ground_truth_used") is not False
         or metadata.get("external_data_used") is not False
         or metadata.get("external_predictions_used") is not False
@@ -415,6 +418,8 @@ def main() -> int:
         "official_training_data_only_declared": True,
         "packaged_reproducibility_state_declared": True,
         "target_specific_alignment_declared": True,
+        "fresh_outputs_required_declared": True,
+        "reconstruction_scope": metadata["reconstruction_scope"],
         "test_ground_truth_used_declared": False,
         "external_data_used_declared": False,
         "external_predictions_used_declared": False,
