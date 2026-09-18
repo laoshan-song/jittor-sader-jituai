@@ -4,17 +4,19 @@
 
 > 一条边发生之后，下一条边会走向哪里？
 
-`jittor-sader-jituai` 保留了算法实现、训练与推理链路及结果重建工具。
+`jittor-sader-jituai` 完整基于国产深度学习框架 **Jittor** 实现，覆盖 MLP、
+embedding、矩阵分解、多头注意力、VAE 与 BPR 六类模型，保留算法实现、训练与
+推理链路及结果重建工具。
 
 <p align="center">
-  <a href="https://github.com/Jittor/jittor"><img src="https://img.shields.io/badge/Framework-Jittor-0ea5e9?style=flat-square" alt="Jittor"></a>
+  <a href="https://github.com/Jittor/jittor"><img src="https://img.shields.io/badge/Jittor-1.3.10.0-0ea5e9?style=flat-square" alt="Jittor 1.3.10.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square" alt="Python 3.10"></a>
   <a href="#competition"><img src="https://img.shields.io/badge/Task-Temporal%20Graph%20Recommendation-8b5cf6?style=flat-square" alt="Temporal Graph Recommendation"></a>
 </p>
 
 <p align="center">
   <a href="#competition">赛题说明</a> ·
-  <a href="#jittor">Jittor 优势</a> ·
+  <a href="#jittor">Jittor 实现与实践</a> ·
   <a href="#a-list">A 榜具体方案</a> ·
   <a href="#b-list">B 榜具体方案</a> ·
   <a href="#reproduce">复现入口</a>
@@ -146,7 +148,7 @@ Jittor 算术探针，环境不符时直接停止。
 
 Jittor 官方将其核心概括为 **JIT 动态编译、元算子和统一计算图执行**：
 Python 前端保留动态图式的开发体验，CUDA/C++ 后端负责编译和优化执行。
-本项目没有虚构跨框架加速比；下面只说明这些机制在仓库里的实际价值。
+下面展示 Jittor 在这套竞赛级方案中的真实落地方式。
 
 | Jittor 机制 | 对本方案的价值 | 仓库中的落点 |
 | --- | --- | --- |
@@ -192,6 +194,21 @@ H'' &= \mathrm{LN}(H'+\mathrm{FFN}(H')).
 - B 榜 Set Transformer：[`d3_set_transformer_v49.py`](B/code/pipeline/code/ruc3/d3_set_transformer_v49.py)
 - B 榜元排序器：[`train_hierarchy_jittor.py`](B/code/pipeline/code/third_1/train_hierarchy_jittor.py)
 - B 榜 MF 训练：[`implicit_mf_jittor.py`](B/code/pipeline/code/b_rank/implicit_mf_jittor.py)
+
+### Jittor 实践要点
+
+这些经验可直接迁移到其他 Jittor 项目：
+
+- **OOV 显式 mask**：以 `(id > 0)` 广播掩码屏蔽未登录节点，避免用 padding 索引
+  污染 embedding 前向，比事后置零更稳。
+- **NumPy 零拷贝互操作**：图统计、稀疏索引用 NumPy 计算，再经 `jt.array` 交给
+  Jittor 求导，CPU 预处理与 GPU 训练各取所长。
+- **大候选分块前向**：百万级查询按块喂入并 `jt.sync_all()`，用固定显存跑完整体
+  推理，无需一次性载入全部候选。
+- **统一损失接口**：同一训练循环用 `nn.cross_entropy_loss`、`softplus`、`AdamW`
+  覆盖分类、BPR 与 VAE 目标，切换损失不改数据流。
+- **CUDA 环境自检**：入口先跑 `jt.flags.use_cuda` 与算术探针，环境不符即停，
+  保证复现结果不受后端差异影响。
 
 <a id="a-list"></a>
 
