@@ -3,7 +3,7 @@
     <img src="assets/branding/ruc-logo.png" alt="中国人民大学" height="72">
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.jittor.org/">
+  <a href="https://cg.cs.tsinghua.edu.cn/jittor/">
     <img src="assets/branding/jittor-logo.png" alt="Jittor 计图" height="72">
   </a>
 </p>
