@@ -1,3 +1,13 @@
+<p align="center">
+  <a href="https://www.ruc.edu.cn/">
+    <img src="assets/branding/ruc-logo.png" alt="中国人民大学" height="72">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.jittor.org/">
+    <img src="assets/branding/jittor-logo.png" alt="Jittor 计图" height="72">
+  </a>
+</p>
+
 <h1 align="center">基于 Jittor 的时序图候选排序</h1>
 
 <h3 align="center">赛道一 · A 榜第 7 名 · B 榜第 2 名</h3>
